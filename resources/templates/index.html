@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DolosPy — NAC Bypass</title>
+  <link rel="shortcut icon" href="/static/misc/favicon.ico" type="image/x-icon">
+  <style>
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --border:    #30363d;
+      --text:      #c9d1d9;
+      --text-dim:  #8b949e;
+      --accent:    #58a6ff;
+      --green:     #3fb950;
+      --red:       #f85149;
+      --orange:    #d29922;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    /* ── header ─────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    header h1 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    header h1 .py { color: var(--green); }
+    #status-badge {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    .status-waiting  { background: var(--orange); color: #000; }
+    .status-ready    { background: var(--green);  color: #000; }
+    .status-error    { background: var(--red);    color: #fff; }
+
+    /* ── toolbar ────────────────────────────────────── */
+    .toolbar {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .toolbar button {
+      background: var(--surface);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      padding: 0.45rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .toolbar button:hover {
+      background: #1f2937;
+      border-color: var(--accent);
+    }
+
+    /* ── main grid ──────────────────────────────────── */
+    main {
+      padding: 1.5rem 2rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card-title {
+      padding: 0.65rem 1rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+    .card-body { padding: 1rem; }
+
+    /* ── key-value pairs ───────────────────────────── */
+    .kv-grid {
+      display: grid;
+      grid-template-columns: minmax(120px, auto) 1fr;
+      gap: 0.35rem 1rem;
+    }
+    .kv-label {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      text-align: right;
+      padding-top: 0.08rem;
+    }
+    .kv-value {
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.85rem;
+      word-break: break-all;
+      min-height: 1.2em;
+    }
+
+    /* ── tables (ARP, DNS) ─────────────────────────── */
+    .full-width { grid-column: 1 / -1; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.83rem;
+    }
+    thead th {
+      text-align: left;
+      padding: 0.5rem 1rem;
+      color: var(--text-dim);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border);
+    }
+    tbody td {
+      padding: 0.45rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: rgba(88,166,255,0.04); }
+    .empty-msg {
+      padding: 1.5rem;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.82rem;
+    }
+
+    /* ── toast / notification ──────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 0.7rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.3s, transform 0.3s;
+      pointer-events: none;
+      z-index: 100;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+    /* ── connection indicator ───────────────────────── */
+    .conn-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 0.35rem;
+    }
+    .conn-dot.connected    { background: var(--green); box-shadow: 0 0 4px var(--green); }
+    .conn-dot.disconnected { background: var(--red);   box-shadow: 0 0 4px var(--red); }
+    #uptime-display {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+    }
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* ── danger button ──────────────────────────────── */
+    .toolbar button.btn-danger {
+      color: var(--red);
+    }
+    .toolbar button.btn-danger:hover {
+      border-color: var(--red);
+    }
+
+    /* ── event log ─────────────────────────────────── */
+    #event-log {
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      padding: 0.75rem 1rem;
+      color: var(--text-dim);
+    }
+    #event-log .log-entry { margin-bottom: 0.15rem; }
+    #event-log .log-type  { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><path d="M2 12h20"/></svg>
+    Dolos<span class="py">Py</span>
+    <span id="status-badge" class="status-waiting">Waiting</span>
+  </h1>
+  <div class="header-meta">
+    <span><span id="conn-dot" class="conn-dot disconnected"></span><span id="conn-label">Disconnected</span></span>
+    <span id="uptime-display">Uptime: --:--:--</span>
+  </div>
+  <div class="toolbar">
+    <button id="btn-hostname">Lookup Hostname</button>
+    <button id="btn-dhcp">DHCP Probe</button>
+    <button id="btn-internet">Allow Internet</button>
+    <button id="btn-resolv">Copy resolv.conf</button>
+    <button id="btn-log">View Log</button>
+    <button id="btn-advertise">Advertise Routes</button>
+    <button id="btn-flush" class="btn-danger">Flush &amp; Shutdown</button>
+  </div>
+</header>
+
+<main>
+  <!-- Host Info -->
+  <div class="card">
+    <div class="card-title">Host / Client</div>
+    <div class="card-body">
+      <div class="kv-grid">
+        <div class="kv-label">IP</div>    <div class="kv-value" id="host_ip">—</div>
+        <div class="kv-label">MAC</div>   <div class="kv-value" id="host_mac">—</div>
+        <div class="kv-label">Name</div>  <div class="kv-value" id="host_name">—</div>
+        <div class="kv-label">TTL</div>   <div class="kv-value" id="host_ttl">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gateway Info -->
+  <div class="card">
+    <div class="card-title">Gateway / Network</div>
+    <div class="card-body">
+      <div class="kv-grid">
+        <div class="kv-label">Gateway IP</div>   <div class="kv-value" id="gateway_ip">—</div>
+        <div class="kv-label">Gateway MAC</div>  <div class="kv-value" id="gateway_mac">—</div>
+        <div class="kv-label">Subnet Mask</div>   <div class="kv-value" id="subnet_mask">—</div>
+        <div class="kv-label">Domain</div>        <div class="kv-value" id="search_domain">—</div>
+        <div class="kv-label">DHCP Server</div>   <div class="kv-value" id="dhcp_server">—</div>
+        <div class="kv-label">NTP Server</div>    <div class="kv-value" id="ntp_server">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DNS Servers -->
+  <div class="card">
+    <div class="card-title">DNS Servers</div>
+    <div class="card-body" style="padding:0">
+      <table>
+        <thead><tr><th>Address</th></tr></thead>
+        <tbody id="dns_servers">
+          <tr><td class="empty-msg" colspan="1">Waiting for DNS traffic…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card">
+    <div class="card-title">Event Log</div>
+    <div class="card-body" style="padding:0">
+      <div id="event-log">
+        <div class="log-entry"><span class="log-type">[init]</span> DolosPy loaded — waiting for packets</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ARP Neighbors -->
+  <div class="card full-width">
+    <div class="card-title">ARP Neighbors</div>
+    <div class="card-body" style="padding:0">
+      <table>
+        <thead><tr><th>IP Address</th><th>MAC Address</th><th>Vendor</th></tr></thead>
+        <tbody id="neighbors">
+          <tr><td class="empty-msg" colspan="3">No ARP entries yet…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+(function () {
+  const socket = io();
+  const seenMACs = new Set();
+  const seenDNS = new Set();
+  let gotFirstInfo = false;
+  let bridgeStartTime = 0;
+  let uptimeInterval = null;
+
+  // ── connection status ──────────────────────────────
+  socket.on('connect', function () {
+    document.getElementById('conn-dot').className = 'conn-dot connected';
+    document.getElementById('conn-label').textContent = 'Connected';
+  });
+  socket.on('disconnect', function () {
+    document.getElementById('conn-dot').className = 'conn-dot disconnected';
+    document.getElementById('conn-label').textContent = 'Disconnected';
+  });
+
+  // ── uptime ─────────────────────────────────────────
+  function startUptimeCounter(startTime) {
+    if (uptimeInterval) return;
+    bridgeStartTime = startTime;
+    uptimeInterval = setInterval(function () {
+      const secs = Math.floor(Date.now() / 1000 - bridgeStartTime);
+      const h = String(Math.floor(secs / 3600)).padStart(2, '0');
+      const m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+      const s = String(secs % 60).padStart(2, '0');
+      document.getElementById('uptime-display').textContent = 'Uptime: ' + h + ':' + m + ':' + s;
+    }, 1000);
+  }
+  // fetch uptime on load
+  fetch('/uptime').then(r => r.json()).then(function (d) {
+    if (d.start_time > 0) startUptimeCounter(d.start_time);
+  });
+
+  function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el && val) el.textContent = val;
+  }
+
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  function addLog(type, msg) {
+    const el = document.getElementById('event-log');
+    const d = document.createElement('div');
+    d.className = 'log-entry';
+    d.innerHTML = `<span class="log-type">[${type}]</span> ${msg}`;
+    el.appendChild(d);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function updateStatus(info) {
+    const badge = document.getElementById('status-badge');
+    if (info.client_ip && info.gateway_ip) {
+      badge.textContent = 'Ready';
+      badge.className = 'status-ready';
+      if (!gotFirstInfo) {
+        gotFirstInfo = true;
+        addLog('bridge', 'NAC bypass active — spoofing configured');
+      }
+    }
+  }
+
+  function applyNetworkInfo(info) {
+    setText('host_ip', info.client_ip);
+    setText('host_mac', info.client_mac);
+    setText('host_name', info.client_name);
+    setText('host_ttl', info.client_ttl);
+    setText('gateway_ip', info.gateway_ip);
+    setText('gateway_mac', info.gateway_mac);
+    setText('subnet_mask', info.subnet_mask);
+    setText('search_domain', info.search_domain);
+    setText('dhcp_server', info.dhcp_server);
+    setText('ntp_server', info.ntp_server);
+    updateStatus(info);
+
+    if (info.dns_servers) {
+      info.dns_servers.forEach(function (s) { addDNS(s); });
+    }
+  }
+
+  function addDNS(server) {
+    if (seenDNS.has(server)) return;
+    seenDNS.add(server);
+    const tbody = document.getElementById('dns_servers');
+    // clear placeholder
+    const ph = tbody.querySelector('.empty-msg');
+    if (ph) ph.parentElement.remove();
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(server)}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  function addARP(ip, mac, vendor) {
+    if (seenMACs.has(mac)) return;
+    seenMACs.add(mac);
+    const tbody = document.getElementById('neighbors');
+    const ph = tbody.querySelector('.empty-msg');
+    if (ph) ph.parentElement.remove();
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(ip)}</td><td>${escapeHtml(mac)}</td><td>${escapeHtml(vendor)}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.appendChild(document.createTextNode(s || ''));
+    return d.innerHTML;
+  }
+
+  // ── socket events ──────────────────────────────────
+  socket.on('network_info', function (info) {
+    applyNetworkInfo(info);
+  });
+
+  socket.on('arp_info', function (entries) {
+    for (const mac in entries) {
+      const ip = entries[mac];
+      fetch('/get_vendor?mac_addr=' + encodeURIComponent(mac))
+        .then(r => r.text())
+        .then(vendor => addARP(ip, mac, vendor));
+    }
+  });
+
+  socket.on('bridge_update', function (msg) {
+    addLog(msg.type, JSON.stringify(msg.data).substring(0, 120));
+
+    if (msg.type === 'new_arp' && msg.data) {
+      const a = msg.data;
+      const ip = a.sender_ip || a.ip || '';
+      const mac = a.sender_mac || a.mac || '';
+      if (ip && mac) {
+        fetch('/get_vendor?mac_addr=' + encodeURIComponent(mac))
+          .then(r => r.text())
+          .then(vendor => addARP(ip, mac, vendor));
+      }
+    }
+    if (msg.type === 'dns_update' && Array.isArray(msg.data)) {
+      msg.data.forEach(addDNS);
+    }
+    if (['cimagm', 'gimacm'].includes(msg.type) && msg.data) {
+      applyNetworkInfo(msg.data);
+    }
+    if (msg.type === 'client_ttl' && msg.data) {
+      if (typeof msg.data === 'object') {
+        setText('host_ttl', msg.data.client_ttl);
+      } else {
+        setText('host_ttl', msg.data);
+      }
+    }
+  });
+
+  // poll for updates
+  socket.emit('get_update');
+  setInterval(function () { socket.emit('get_update'); }, 10000);
+
+  // ── toolbar actions ────────────────────────────────
+  document.getElementById('btn-hostname').addEventListener('click', function () {
+    fetch('/lookup_hostname').then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-dhcp').addEventListener('click', function () {
+    fetch('/send_dhcp_probe').then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-internet').addEventListener('click', function () {
+    fetch('/allow_internet_traffic').then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-log').addEventListener('click', function () {
+    window.open('/current_log', '_blank');
+  });
+  document.getElementById('btn-resolv').addEventListener('click', function () {
+    let rc = '';
+    const sd = document.getElementById('search_domain').textContent.trim();
+    if (sd && sd !== '—') rc += 'search ' + sd + '\n';
+    seenDNS.forEach(function (s) { rc += 'nameserver ' + s + '\n'; });
+    navigator.clipboard.writeText(rc).then(function () {
+      toast('resolv.conf copied to clipboard');
+    });
+  });
+  document.getElementById('btn-advertise').addEventListener('click', function () {
+    fetch('/advertise_routes', { method: 'POST' }).then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-flush').addEventListener('click', function () {
+    if (confirm('Flush all tables and shut down? This will stop the bridge and exit DolosPy.')) {
+      fetch('/flush_tables', { method: 'POST' }).then(r => r.text()).then(toast);
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

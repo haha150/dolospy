@@ -1,0 +1,6 @@
+# Defaults for hostapd initscript
+#
+# Uncomment and set DAEMON_CONF to the absolute path of a hostapd configuration
+# file and hostapd will be started during system boot.
+#
+DAEMON_CONF="/etc/hostapd/hostapd.conf"
