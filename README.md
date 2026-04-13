@@ -69,7 +69,7 @@ cd /root/dolospy/setup/lte_mgmt
 sudo bash finish_setup.sh
 ```
 
-This copies interface configs, adds eth0/eth1 to the NetworkManager unmanaged list, and enables the `dolos_service` init script.
+This copies interface configs, adds eth0/eth1 to the NetworkManager unmanaged list, and enables the `dolospy` systemd service.
 
 ### 5. (Optional) WiFi hotspot
 
@@ -169,10 +169,9 @@ Order of eth0/eth1 does not matter.
 
 ### What happens on boot
 
-1. Init script waits 10 seconds for hardware init
-2. LTE USB interface (`usb0`) is brought up, `dhclient` gets an IP
-3. Tailscale connects to your Tailnet
-4. DolosPy starts in a tmux session
+1. LTE USB interface (`usb0`) is brought up, `dhclient` gets an IP (backgrounded, non-blocking)
+2. Tailscale connects to your Tailnet (backgrounded)
+3. DolosPy starts in a tmux session
 5. Bridge is created, traffic passthrough begins immediately
 6. ARP/IP sniffing discovers gateway and client (typically within seconds)
 7. Spoofing rules are applied automatically
@@ -197,7 +196,7 @@ Click **Flush & Shutdown** and confirm.
 Press `Ctrl+C` or:
 
 ```bash
-sudo /etc/init.d/dolos_service stop
+sudo systemctl stop dolospy
 ```
 
 ### Full cleanup
@@ -206,11 +205,12 @@ To undo all setup and restore the device to stock:
 
 ```bash
 # stop services
-sudo /etc/init.d/dolos_service stop
-sudo systemctl disable dolos_service
+sudo systemctl stop dolospy
+sudo systemctl disable dolospy
 
-# remove init script
-sudo rm /etc/init.d/dolos_service
+# remove service file
+sudo rm /etc/systemd/system/dolospy.service
+sudo systemctl daemon-reload
 
 # remove interface configs
 sudo rm -f /etc/network/interfaces.d/eth0 /etc/network/interfaces.d/eth1
@@ -251,7 +251,7 @@ dolospy/
 │   │   ├── setup.sh         # install dependencies
 │   │   ├── finish_setup.sh  # enable boot persistence
 │   │   ├── config.yaml      # default config for LTE setup
-│   │   ├── etc_init.d_dolos_service
+│   │   ├── dolospy.service   # systemd unit file
 │   │   ├── etc_network_interfaces.d_eth0
 │   │   ├── etc_network_interfaces.d_eth1
 │   │   └── etc_NetworkManager_conf.d_99-unmanaged-devices.conf

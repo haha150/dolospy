@@ -23,8 +23,7 @@ ln -sf /dev/null /etc/systemd/network/99-default.link
 
 #set up configs
 cp ./config.yaml ../../
-cp ./etc_init.d_dolos_service /etc/init.d/dolos_service
-chmod +x /etc/init.d/dolos_service
+cp ./dolospy.service /etc/systemd/system/dolospy.service
 
 #reload the daemons
 systemctl daemon-reload

@@ -1,0 +1,22 @@
+[Unit]
+Description=DolosPy NAC bypass
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStartPre=-/sbin/ip link set usb0 up
+ExecStartPre=-/bin/sh -c '/sbin/dhclient -1 -timeout 10 usb0 &'
+ExecStartPre=-/bin/sleep 5
+ExecStartPre=-/bin/systemctl start tailscaled
+ExecStartPre=-/bin/sh -c '/usr/bin/tailscale up --ssh &'
+ExecStart=/usr/bin/tmux new-session -d -s dolospy /root/dolospy/venv/bin/python3 /root/dolospy/dolos.py
+ExecStop=-/usr/bin/tailscale down
+ExecStop=/usr/bin/tmux kill-session -t dolospy
+WorkingDirectory=/root/dolospy
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
