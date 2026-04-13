@@ -370,7 +370,7 @@ class NetInfo:
             return
         options = self._dhcp_options_dict(pkt[DHCP])
         hostname = options.get("hostname")
-        if hostname:
+        if hostname and hostname not in ("foobar",):
             self._update_value("client_name", hostname, "Found hostname from DHCP request")
 
     def _parse_dhcp_reply(self, pkt) -> None:
