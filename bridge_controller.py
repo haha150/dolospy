@@ -455,6 +455,12 @@ class BridgeController:
         for server in dns_servers:
             server = _validate_ip_or_cidr(server)
             self._os_cmd(f"Add DNS server {server}", f"echo nameserver {server} >> /etc/resolv.conf")
+            # Route DNS traffic through the bridge virtual gateway —
+            # DNS servers may be outside the private ranges we route by default
+            self._os_cmd(
+                f"Route to DNS server {server}",
+                f"ip route replace {server}/32 via {self.virtual_gateway_ip} dev {self.bridge_name}",
+            )
 
     def new_arp(self, arp_info: dict) -> None:
         ip = arp_info.get("sender_ip") or arp_info.get("ip", "")

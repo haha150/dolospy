@@ -172,12 +172,15 @@ class NetInfo:
         log.info("IP sniffer stopped")
 
     def _dispatch(self, pkt) -> None:
+        # Always parse DNS/DHCP/hostname info regardless of phase —
+        # DHCP replies carrying domain info arrive early during gateway_search
+        # and would be missed if we only parsed in dns_search phase.
+        self._dns_search(pkt)
+
         if self._phase == "gateway_search":
             self._gateway_search(pkt)
         elif self._phase == "ttl_search":
             self._ttl_search(pkt)
-        elif self._phase == "dns_search":
-            self._dns_search(pkt)
 
     # ── phase 1: gateway search ──────────────────────────────────────
 
