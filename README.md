@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="resources/static/misc/dolospy.png" alt="DolosPy" width="150">
+</p>
+
 # DolosPy
 
 A Python NAC (Network Access Control) bypass tool. Creates a transparent Layer 2 bridge between two network interfaces, passively discovers the gateway and client via ARP mismatch detection, and applies ebtables/iptables/arptables rules to masquerade as the client on the network.
 
-Re-implementation of [DolosJS](https://github.com/xslem/dolosjs) in Python with improvements: scapy-based packet parsing, input validation, dynamic interface management, auto DHCP probing, mDNS/NBNS hostname discovery, ARP keepalive for sleeping clients, and a modern web UI.
+Re-implementation of [DolosJS](https://github.com/fkasler/dolosjs) in Python with improvements: scapy-based packet parsing, input validation, dynamic interface management, auto DHCP probing, mDNS/NBNS hostname discovery, ARP keepalive for sleeping clients, and a modern web UI.
 
 ## How It Works
 
