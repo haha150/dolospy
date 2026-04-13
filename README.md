@@ -39,8 +39,8 @@ Re-implementation of [DolosJS](https://github.com/xslem/dolosjs) in Python with 
 ### 1. Clone and run setup
 
 ```bash
-git clone <repo-url> /root/tools/dolospy
-cd /root/tools/dolospy/setup/lte_mgmt
+git clone <repo-url> /root/dolospy
+cd /root/dolospy/setup/lte_mgmt
 sudo bash setup.sh
 ```
 
@@ -65,7 +65,7 @@ ssh root@<tailscale-ip>
 ### 4. Enable boot persistence
 
 ```bash
-cd /root/tools/dolospy/setup/lte_mgmt
+cd /root/dolospy/setup/lte_mgmt
 sudo bash finish_setup.sh
 ```
 
@@ -76,7 +76,7 @@ This copies interface configs, adds eth0/eth1 to the NetworkManager unmanaged li
 If your device has a WiFi interface and you want a local backup SSH path:
 
 ```bash
-cd /root/tools/dolospy/setup/wifi_hotspot
+cd /root/dolospy/setup/wifi_hotspot
 sudo bash setup_wifi.sh
 ```
 
@@ -108,7 +108,7 @@ autorun_command: ""             # command to run on success
 ### Manual start
 
 ```bash
-sudo /root/tools/dolospy/venv/bin/python3 /root/tools/dolospy/dolos.py
+sudo /root/dolospy/venv/bin/python3 /root/dolospy/dolos.py
 ```
 
 ### Auto-start (after finish_setup.sh)

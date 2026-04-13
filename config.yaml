@@ -3,4 +3,4 @@ network_interface2: eth1
 management_subnet: "172.31.255.0/24"
 replace_default_route: false
 run_command_on_success: false
-autorun_command: "date > /root/tools/dolospy/cmd_test.txt"
+autorun_command: "date > /root/dolospy/cmd_test.txt"

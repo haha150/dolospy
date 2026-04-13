@@ -3,12 +3,14 @@
 # Provides:        dolos_service
 # Required-Start:  $network $remote_fs $syslog
 # Required-Stop:   $network $remote_fs $syslog
-# Default-Start:   3
-# Default-Stop:
+# Default-Start:   2 3 4 5
+# Default-Stop:    0 1 6
 # Short-Description: Start DolosPy and usb0 LTE
 ### END INIT INFO
 
 . /lib/lsb/init-functions
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 case "$1" in
     start)
@@ -19,7 +21,8 @@ case "$1" in
         #ensure tailscaled is running before bringing up the tunnel
         systemctl start tailscaled 2>/dev/null
         tailscale up --ssh 2>/dev/null &
-        tmux new -s dolospy -d "/root/tools/dolospy/venv/bin/python3 /root/tools/dolospy/dolos.py"
+        cd /root/dolospy
+        /usr/bin/tmux new -s dolospy -d "/root/dolospy/venv/bin/python3 /root/dolospy/dolos.py"
         log_action_msg "DolosPy + usb0 LTE + Tailscale started"
         ;;
     stop)
