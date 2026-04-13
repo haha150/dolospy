@@ -2,7 +2,7 @@
 
 A Python NAC (Network Access Control) bypass tool. Creates a transparent Layer 2 bridge between two network interfaces, passively discovers the gateway and client via ARP mismatch detection, and applies ebtables/iptables/arptables rules to masquerade as the client on the network.
 
-Re-implementation of [DolosJS](https://github.com/xslem/dolosjs) in Python with improvements: scapy-based packet parsing, input validation, dynamic interface management, auto DHCP probing, NBNS/LLMNR/mDNS hostname discovery, and a modern web UI.
+Re-implementation of [DolosJS](https://github.com/xslem/dolosjs) in Python with improvements: scapy-based packet parsing, input validation, dynamic interface management, auto DHCP probing, mDNS/NBNS hostname discovery, ARP keepalive for sleeping clients, and a modern web UI.
 
 ## How It Works
 
@@ -49,8 +49,10 @@ This installs all dependencies: Python 3, pip, bridge-utils, iptables, ebtables,
 ### 2. Authenticate Tailscale
 
 ```bash
-sudo tailscale up --ssh
+sudo tailscale up --ssh --accept-dns=false
 ```
+
+The `--accept-dns=false` flag prevents Tailscale from overwriting `/etc/resolv.conf` with its MagicDNS resolver. DolosPy needs to write the target network's DNS servers there.
 
 Follow the URL to authenticate your device to your Tailnet. This only needs to be done once — Tailscale auto-reconnects on subsequent boots.
 
@@ -175,8 +177,9 @@ Order of eth0/eth1 does not matter.
 5. Bridge is created, traffic passthrough begins immediately
 6. ARP/IP sniffing discovers gateway and client (typically within seconds)
 7. Spoofing rules are applied automatically
-8. If gateway not detected after 60 seconds, an automatic DHCP probe is sent
-9. Web UI available on port 4444
+8. ARP keepalive starts (gratuitous ARP every 30s to maintain gateway ARP cache)
+9. If gateway not detected after 60 seconds, an automatic DHCP probe is sent
+10. Web UI available on port 4444
 
 ### After bypass is active
 
@@ -198,6 +201,16 @@ Press `Ctrl+C` or:
 ```bash
 sudo systemctl stop dolospy
 ```
+
+### Safe restart (without losing SSH)
+
+The flush/shutdown button sets OUTPUT DROP which kills your SSH session. Use the restart script instead:
+
+```bash
+sudo bash /root/dolospy/restart.sh
+```
+
+This flushes all rules, unlocks resolv.conf, resets OUTPUT ACCEPT, tears down the bridge, and restarts dolospy in tmux.
 
 ### Full cleanup
 
@@ -222,8 +235,10 @@ sudo rm -f /etc/hostapd/hostapd.conf /etc/network/interfaces.d/wlan0
 
 # flush any remaining rules
 sudo iptables -F && sudo iptables -t nat -F && sudo iptables -t mangle -F
+sudo ip6tables -F && sudo ip6tables -P OUTPUT ACCEPT
 sudo ebtables -F && sudo ebtables -t nat -F
 sudo arptables -F
+sudo chattr -i /etc/resolv.conf 2>/dev/null
 
 sudo reboot
 ```
@@ -233,13 +248,14 @@ sudo reboot
 ```
 dolospy/
 ├── dolos.py                 # main entry point — FastAPI + Socket.IO web server
-├── bridge_controller.py     # bridge lifecycle, iptables/ebtables/arptables rules
-├── net_info.py              # packet sniffing state machine (gateway/TTL/DNS discovery)
+├── bridge_controller.py     # bridge lifecycle, iptables/ebtables/arptables rules, ARP keepalive
+├── net_info.py              # packet sniffing state machine (gateway/TTL/DNS/DHCP discovery)
 ├── arp_table.py             # ARP sniffer — maintains MAC→IP table
 ├── dhcp_probe.py            # sends spoofed DHCP Discover via scapy
 ├── mac_vendor.py            # MAC prefix → vendor name lookup
 ├── mac_to_vendor.json       # vendor database (43K entries)
 ├── config.yaml              # runtime config
+├── restart.sh               # safe restart script (preserves SSH access)
 ├── requirements.txt         # Python dependencies
 ├── resources/
 │   ├── templates/
@@ -267,6 +283,28 @@ dolospy/
     ├── history.log           # persistent log (append)
     └── current.log           # current session log (overwritten each run)
 ```
+
+## OPSEC Considerations
+
+DolosPy takes several measures to stay invisible on the network:
+
+- **STP disabled** — the bridge never sends BPDUs, avoiding port shutdown by BPDU Guard on enterprise switches
+- **IPv6 fully disabled** — `disable_ipv6=1` on all bridge interfaces prevents link-local address creation and neighbor discovery leaks
+- **ip6tables OUTPUT DROP** — blocks any stray IPv6 traffic from the Pi
+- **ARP suppression** — bridge has `arp off`, all ARP output is dropped by arptables
+- **MAC spoofing** — all outbound frames are rewritten to match the client/gateway MAC via ebtables SNAT
+- **TTL spoofing** — iptables mangle matches the client's original TTL to defeat OS fingerprinting
+- **resolv.conf locked** — `chattr +i` prevents Tailscale/dhclient from overwriting discovered DNS servers
+- **Tailscale --accept-dns=false** — prevents MagicDNS from hijacking system DNS
+- **ARP keepalive** — gratuitous ARPs every 30s keep the gateway's ARP cache alive when the client sleeps
+- **EAPOL passthrough** — 802.1X frames forwarded transparently (`group_fwd_mask = 8`)
+- **No LLDP/CDP** — verify `lldpd` is not running: `systemctl disable lldpd 2>/dev/null`
+
+### Limitations
+
+- If the client is powered off completely and 802.1X re-authentication occurs (timer typically 1-12h), the port will de-auth. Sleep/hibernate is fine — only full power-off is a risk.
+- NAC profiling agents (ForeScout, ISE) may detect Pi traffic via passive TCP fingerprinting despite TTL spoofing. OUTPUT DROP mitigates active scans.
+- If the client's DHCP lease expires during extended sleep (8-24h+), the DHCP server could theoretically reassign the IP.
 
 ## Troubleshooting
 
@@ -296,3 +334,17 @@ dolospy/
 - Check hostapd status: `systemctl status hostapd`
 - Check udhcpd status: `systemctl status udhcpd`
 - On Pi 5, you may need to `sudo rfkill unblock wifi` first
+
+### DNS lookups failing after bypass
+
+- Check `/etc/resolv.conf` has the correct nameservers: `cat /etc/resolv.conf`
+- If Tailscale overwrote it, re-run `tailscale up --ssh --accept-dns=false`
+- Verify DNS server routes exist: `ip route | grep <dns-server-ip>`
+- DNS servers outside RFC 1918 ranges are automatically routed through the bridge
+
+### resolv.conf locked after crash
+
+If dolospy crashes without proper shutdown, resolv.conf may remain immutable:
+```bash
+sudo chattr -i /etc/resolv.conf
+```
