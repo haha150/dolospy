@@ -12,7 +12,6 @@ ExecStartPre=-/bin/sleep 5
 ExecStartPre=-/bin/systemctl start tailscaled
 ExecStartPre=-/bin/sh -c '/usr/bin/tailscale up --ssh --accept-dns=false &'
 ExecStart=/usr/bin/tmux new-session -d -s dolospy /root/dolospy/venv/bin/python3 /root/dolospy/dolos.py
-ExecStop=-/usr/bin/tailscale down
 ExecStop=/usr/bin/tmux kill-session -t dolospy
 WorkingDirectory=/root/dolospy
 RemainAfterExit=yes
