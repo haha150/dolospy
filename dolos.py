@@ -64,10 +64,7 @@ bridge = BridgeController(config)
 # ── FastAPI + Socket.IO ──────────────────────────────────────────────
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = FastAPI(title="DolosPy")
-try:
-    sio_app = socketio.ASGIApp(sio, other_app=app)
-except TypeError:
-    sio_app = socketio.ASGIApp(sio, app=app)
+sio_app = socketio.ASGIApp(sio, app)
 
 # mount static files
 app.mount("/static", StaticFiles(directory=str(RESOURCES / "static")), name="static")
