@@ -87,6 +87,11 @@ class BridgeController:
         self._seen_arp: set[str] = set()
         self._dhcp_probe_timer: threading.Timer | None = None
         self.bridge_start_time: float = 0.0
+        self._arp_keepalive_stop = threading.Event()
+        self._spoofed_client_mac: str = ""
+        self._spoofed_client_ip: str = ""
+        self._spoofed_gateway_mac: str = ""
+        self._spoofed_gateway_ip: str = ""
 
     # ── callback helpers ─────────────────────────────────────────────
 
@@ -318,6 +323,7 @@ class BridgeController:
         if not shutdown:
             return
         self._iface_watcher_stop.set()
+        self._arp_keepalive_stop.set()
         if self._dhcp_probe_timer:
             self._dhcp_probe_timer.cancel()
             self._dhcp_probe_timer = None
@@ -405,6 +411,11 @@ class BridgeController:
         oc("Allow outbound to switch", f"ebtables -A OUTPUT -o {gsi} -j ACCEPT")
         oc("Allow bridge IP outbound", f"iptables -A OUTPUT -o {self.bridge_name} -s {self.bridge_ip} -j ACCEPT")
 
+        # store for gratuitous ARP keepalive
+        self._spoofed_client_mac = client_mac
+        self._spoofed_client_ip = client_ip
+        self._spoofed_gateway_mac = gateway_mac
+
         if self.run_command_on_success:
             oc("Autorun command", self.autorun_command)
 
@@ -438,6 +449,43 @@ class BridgeController:
             )
 
         oc("Allow outbound to client", f"ebtables -A OUTPUT -o {csi} -j ACCEPT")
+
+        # store gateway IP and start ARP keepalive
+        self._spoofed_gateway_ip = gateway_ip
+        self._start_arp_keepalive()
+
+    # ── ARP keepalive ────────────────────────────────────────────────
+
+    def _start_arp_keepalive(self) -> None:
+        """Send periodic gratuitous ARPs on the bridge to keep the gateway's
+        ARP cache entry alive for the client IP.  Without this, a sleeping
+        client causes the gateway to drop the ARP entry and return traffic
+        for our SNAT'd connections stops flowing."""
+        def _keepalive():
+            from scapy.all import ARP, Ether, sendp
+            while not self._arp_keepalive_stop.is_set():
+                try:
+                    # gratuitous ARP: "client_ip is-at client_mac"
+                    pkt = (
+                        Ether(src=self._spoofed_client_mac, dst="ff:ff:ff:ff:ff:ff")
+                        / ARP(
+                            op="is-at",
+                            hwsrc=self._spoofed_client_mac,
+                            psrc=self._spoofed_client_ip,
+                            hwdst="ff:ff:ff:ff:ff:ff",
+                            pdst=self._spoofed_client_ip,
+                        )
+                    )
+                    sendp(pkt, iface=self.gateway_side_interface, verbose=False)
+                    log.debug("ARP keepalive sent for %s", self._spoofed_client_ip)
+                except Exception:
+                    log.debug("ARP keepalive failed", exc_info=True)
+                self._arp_keepalive_stop.wait(30)  # every 30 seconds
+
+        t = threading.Thread(target=_keepalive, daemon=True, name="arp-keepalive")
+        t.start()
+        log.info("ARP keepalive started (every 30s) for %s / %s",
+                 self._spoofed_client_ip, self._spoofed_client_mac)
 
     # ── runtime actions ──────────────────────────────────────────────
 
