@@ -310,20 +310,18 @@ class NetInfo:
         if udp.dport == 68:
             self._parse_dhcp_reply(pkt)
 
-        # NBNS name query (port 137) — many printers/IoT use this
-        if (udp.sport == 137 or udp.dport == 137) and ether.src.lower() == self.client_mac:
+        # NBNS registration (port 137, response from client) — contains the client's own name
+        if udp.sport == 137 and ether.src.lower() == self.client_mac:
             self._parse_nbns(pkt)
 
-        # LLMNR (port 5355) — Windows devices
-        if udp.dport == 5355 and ether.src.lower() == self.client_mac:
-            self._parse_llmnr(pkt)
-
-        # mDNS (port 5353) — Apple/Linux/IoT
+        # mDNS announcements (port 5353, response from client) — contains the client's own name
         if udp.dport == 5353 and ether.src.lower() == self.client_mac:
             self._parse_mdns(pkt)
 
     def _parse_nbns(self, pkt) -> None:
-        """Extract hostname from NetBIOS Name Service queries (UDP 137)."""
+        """Extract hostname from NetBIOS Name Service registration responses (UDP 137).
+        Only responses (sport=137) contain the client's own name.
+        Queries contain names the client is looking up (e.g. wpad) — not useful."""
         try:
             if pkt.haslayer(NBNSQueryRequest):
                 name = pkt[NBNSQueryRequest].QUESTION_NAME
@@ -331,40 +329,29 @@ class NetInfo:
                     name = name.decode("utf-8", errors="replace")
                 name = name.strip()
                 if name and name != "*":
-                    self._update_value("client_name", name, "Found hostname from NBNS")
+                    self._update_value("client_name", name, "Found hostname from NBNS registration")
         except Exception:
             log.debug("NBNS parse error", exc_info=True)
 
-    def _parse_llmnr(self, pkt) -> None:
-        """Extract hostname from LLMNR queries (UDP 5355)."""
-        try:
-            if pkt.haslayer(DNS):
-                dns = pkt[DNS]
-                if dns.qr == 0 and dns.qdcount > 0:  # query
-                    name = dns.qd.qname
-                    if isinstance(name, bytes):
-                        name = name.decode("utf-8", errors="replace")
-                    name = name.rstrip(".")
-                    if name:
-                        self._update_value("client_name", name, "Found hostname from LLMNR")
-        except Exception:
-            log.debug("LLMNR parse error", exc_info=True)
-
     def _parse_mdns(self, pkt) -> None:
-        """Extract hostname from mDNS queries (UDP 5353)."""
+        """Extract hostname from mDNS response announcements (UDP 5353).
+        Only responses (QR=1) contain the client announcing its own name.
+        Queries contain names the client is looking up — not useful."""
         try:
             if pkt.haslayer(DNS):
                 dns = pkt[DNS]
-                if dns.qr == 0 and dns.qdcount > 0:  # query
-                    name = dns.qd.qname
-                    if isinstance(name, bytes):
-                        name = name.decode("utf-8", errors="replace")
-                    # mDNS names end with .local.
-                    if name.endswith(".local.") or name.endswith(".local"):
-                        hostname = name.split(".")[0]
-                        # skip service types like _ipps, _tcp, _http, etc.
-                        if hostname and not hostname.startswith("_"):
-                            self._update_value("client_name", hostname, "Found hostname from mDNS")
+                # only use responses (announcements), not queries
+                if dns.qr == 1 and dns.ancount > 0:
+                    for i in range(dns.ancount):
+                        rr = dns.an[i]
+                        name = rr.rrname
+                        if isinstance(name, bytes):
+                            name = name.decode("utf-8", errors="replace")
+                        if name.endswith(".local.") or name.endswith(".local"):
+                            hostname = name.split(".")[0]
+                            if hostname and not hostname.startswith("_"):
+                                self._update_value("client_name", hostname, "Found hostname from mDNS announcement")
+                                return
         except Exception:
             log.debug("mDNS parse error", exc_info=True)
 
@@ -374,6 +361,9 @@ class NetInfo:
         options = self._dhcp_options_dict(pkt[DHCP])
         hostname = options.get("hostname")
         if hostname and hostname not in ("foobar",):
+            # DHCP hostname is the most authoritative source — overwrite any
+            # previously detected name (which may have come from NBNS/mDNS)
+            self.client_name = ""
             self._update_value("client_name", hostname, "Found hostname from DHCP request")
 
     def _parse_dhcp_reply(self, pkt) -> None:
