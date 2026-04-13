@@ -463,6 +463,9 @@
         setText('host_ttl', msg.data);
       }
     }
+    if (msg.type === 'network_info' && msg.data) {
+      applyNetworkInfo(msg.data);
+    }
   });
 
   // poll for updates

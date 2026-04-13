@@ -256,6 +256,9 @@ class BridgeController:
         self.net_info = NetInfo(self.bridge_name, self.bridge_mac)
 
         self.net_info.on("new_arp", lambda info: self.new_arp(info))
+        self.net_info.on("network_update", lambda _: (
+            self._emit("bridge_update", {"type": "network_info", "data": self.net_info.print_info()}),
+        ))
         self.net_info.on("dns_update", lambda servers: (
             self._emit("bridge_update", {"type": "dns_update", "data": servers}),
             self.update_dns(servers),
