@@ -202,6 +202,8 @@ class BridgeController:
         # policy: drop all outbound from our device
         oc("Allow loopback traffic", "iptables -A OUTPUT -o lo -j ACCEPT")
         oc("Drop all outbound IP traffic", "iptables -P OUTPUT DROP")
+        oc("Drop all outbound IPv6 traffic", "ip6tables -A OUTPUT -o lo -j ACCEPT")
+        oc("Drop all outbound IPv6 traffic", "ip6tables -P OUTPUT DROP")
         oc("Drop all outbound Ethernet traffic", "ebtables -P OUTPUT DROP")
         oc("Drop all outbound ARP traffic", "arptables -P OUTPUT DROP")
 
@@ -222,9 +224,12 @@ class BridgeController:
 
         # create the bridge
         oc("Create bridge", f"brctl addbr {self.bridge_name}")
+        oc("Disable STP on bridge", f"brctl stp {self.bridge_name} off")
 
-        # disable IPv6
+        # fully disable IPv6 — autoconf/accept_ra alone still allows
+        # link-local addresses which leak the bridge's presence
         for dev in (self.bridge_name, self.nic1, self.nic2):
+            oc(f"Disable IPv6 on {dev}", f"sysctl -w net.ipv6.conf.{dev}.disable_ipv6=1")
             oc(f"Disable IPv6 autoconf on {dev}", f"sysctl -w net.ipv6.conf.{dev}.autoconf=0")
             oc(f"Ignore IPv6 RA on {dev}", f"sysctl -w net.ipv6.conf.{dev}.accept_ra=0")
 
@@ -314,6 +319,8 @@ class BridgeController:
         oc("Clear iptables NAT", "iptables -t nat -F")
         oc("Clear iptables mangle", "iptables -t mangle -F")
         oc("Clear iptables raw", "iptables -t raw -F")
+        oc("Clear ip6tables", "ip6tables -F")
+        oc("Reset ip6tables policy", "ip6tables -P OUTPUT ACCEPT")
 
         self._allow_non_attack_interfaces()
 
