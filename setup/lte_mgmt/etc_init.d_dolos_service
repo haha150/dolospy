@@ -19,12 +19,12 @@ case "$1" in
         #ensure tailscaled is running before bringing up the tunnel
         systemctl start tailscaled 2>/dev/null
         tailscale up --ssh 2>/dev/null &
-        tmux new -s dolospy -d "python3 /root/tools/dolospy/dolos.py"
+        tmux new -s dolospy -d "/root/tools/dolospy/venv/bin/python3 /root/tools/dolospy/dolos.py"
         log_action_msg "DolosPy + usb0 LTE + Tailscale started"
         ;;
     stop)
         tailscale down 2>/dev/null
-        pkill -f "python3.*dolos.py"
+        pkill -f "dolospy/venv/bin/python3.*dolos.py"
         pkill -f tmux.*dolospy
         ;;
     *)

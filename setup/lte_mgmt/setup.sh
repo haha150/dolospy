@@ -29,9 +29,10 @@ chmod +x /etc/init.d/dolos_service
 #reload the daemons
 systemctl daemon-reload
 
-#install Python deps
+#install Python deps in a venv
 cd ../../
-pip3 install -r requirements.txt
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
 
 echo ""
 echo "All set up! Check that your callback is working"

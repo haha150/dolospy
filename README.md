@@ -108,7 +108,7 @@ autorun_command: ""             # command to run on success
 ### Manual start
 
 ```bash
-sudo python3 /root/tools/dolospy/dolos.py
+sudo /root/tools/dolospy/venv/bin/python3 /root/tools/dolospy/dolos.py
 ```
 
 ### Auto-start (after finish_setup.sh)
