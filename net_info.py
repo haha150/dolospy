@@ -359,7 +359,8 @@ class NetInfo:
                     # mDNS names end with .local.
                     if name.endswith(".local.") or name.endswith(".local"):
                         hostname = name.split(".")[0]
-                        if hostname:
+                        # skip service types like _ipps, _tcp, _http, etc.
+                        if hostname and not hostname.startswith("_"):
                             self._update_value("client_name", hostname, "Found hostname from mDNS")
         except Exception:
             log.debug("mDNS parse error", exc_info=True)

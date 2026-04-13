@@ -83,6 +83,8 @@ class BridgeController:
         # track which interfaces we've already allowed
         self._allowed_ifaces: set[str] = set()
         self._iface_watcher_stop = threading.Event()
+        # track which ARP entries we've already seen
+        self._seen_arp: set[str] = set()
         self._dhcp_probe_timer: threading.Timer | None = None
         self.bridge_start_time: float = 0.0
 
@@ -253,10 +255,7 @@ class BridgeController:
         # start network info tracker
         self.net_info = NetInfo(self.bridge_name, self.bridge_mac)
 
-        self.net_info.on("new_arp", lambda info: (
-            self._emit("bridge_update", {"type": "new_arp", "data": info}),
-            self.new_arp(info),
-        ))
+        self.net_info.on("new_arp", lambda info: self.new_arp(info))
         self.net_info.on("dns_update", lambda servers: (
             self._emit("bridge_update", {"type": "dns_update", "data": servers}),
             self.update_dns(servers),
@@ -461,6 +460,11 @@ class BridgeController:
         ip = arp_info.get("sender_ip") or arp_info.get("ip", "")
         mac = arp_info.get("sender_mac") or arp_info.get("mac", "")
         if ip and mac:
+            key = f"{mac}:{ip}"
+            if key in self._seen_arp:
+                return
+            self._seen_arp.add(key)
+            self._emit("bridge_update", {"type": "new_arp", "data": arp_info})
             ip = _validate_ip_or_cidr(ip)
             mac = _validate_mac(mac)
             self._os_cmd(f"ARP neighbour {ip}", f"ip neigh replace {ip} lladdr {mac} dev {self.bridge_name}")
