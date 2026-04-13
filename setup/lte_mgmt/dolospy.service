@@ -10,7 +10,7 @@ ExecStartPre=-/sbin/ip link set usb0 up
 ExecStartPre=-/bin/sh -c '/sbin/dhclient -1 -timeout 10 usb0 &'
 ExecStartPre=-/bin/sleep 5
 ExecStartPre=-/bin/systemctl start tailscaled
-ExecStartPre=-/bin/sh -c '/usr/bin/tailscale up --ssh &'
+ExecStartPre=-/bin/sh -c '/usr/bin/tailscale up --ssh --accept-dns=false &'
 ExecStart=/usr/bin/tmux new-session -d -s dolospy /root/dolospy/venv/bin/python3 /root/dolospy/dolos.py
 ExecStop=-/usr/bin/tailscale down
 ExecStop=/usr/bin/tmux kill-session -t dolospy

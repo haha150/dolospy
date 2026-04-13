@@ -300,6 +300,7 @@ class BridgeController:
 
     def flush_tables(self, shutdown: bool = False) -> None:
         oc = self._os_cmd
+        oc("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
         oc("Clear ebtables", "ebtables -F")
         oc("Clear ebtables filter", "ebtables -t filter -F")
         oc("Clear ebtables NAT", "ebtables -t nat -F")
@@ -454,6 +455,8 @@ class BridgeController:
 
     def update_dns(self, dns_servers: list[str]) -> None:
         log.info("Updating DNS: %s", dns_servers)
+        # unlock resolv.conf in case we previously locked it
+        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
         self._os_cmd("Clear DNS settings", "> /etc/resolv.conf")
         for server in dns_servers:
             server = _validate_ip_or_cidr(server)
@@ -464,6 +467,8 @@ class BridgeController:
                 f"Route to DNS server {server}",
                 f"ip route replace {server}/32 via {self.virtual_gateway_ip} dev {self.bridge_name}",
             )
+        # lock resolv.conf so Tailscale/dhclient can't overwrite it
+        self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
 
     def new_arp(self, arp_info: dict) -> None:
         ip = arp_info.get("sender_ip") or arp_info.get("ip", "")

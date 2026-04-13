@@ -2,6 +2,7 @@
 # Restart DolosPy cleanly without losing network access
 # Usage: sudo bash restart.sh
 
+chattr -i /etc/resolv.conf 2>/dev/null
 iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -P OUTPUT ACCEPT
 ebtables -F && ebtables -t nat -F && ebtables -P OUTPUT ACCEPT
 arptables -F && arptables -P OUTPUT ACCEPT
