@@ -118,7 +118,9 @@ class NetInfo:
         }
 
     def lookup_hostname(self) -> None:
-        if self.client_name == "" and self.client_ip != "":
+        """Reverse DNS lookup on client IP. Always overwrites existing hostname
+        since this is user-triggered and reverse DNS is the most authoritative source."""
+        if self.client_ip != "":
             try:
                 hosts = socket.gethostbyaddr(self.client_ip)
                 self.client_name = hosts[0]
@@ -360,9 +362,6 @@ class NetInfo:
         options = self._dhcp_options_dict(pkt[DHCP])
         hostname = options.get("hostname")
         if hostname and hostname not in ("foobar",):
-            # DHCP hostname is the most authoritative source — overwrite any
-            # previously detected name (which may have come from NBNS/mDNS)
-            self.client_name = ""
             self._update_value("client_name", hostname, "Found hostname from DHCP request")
 
     def _parse_dhcp_reply(self, pkt) -> None:
