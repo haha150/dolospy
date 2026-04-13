@@ -123,6 +123,7 @@ class NetInfo:
                 hosts = socket.gethostbyaddr(self.client_ip)
                 self.client_name = hosts[0]
                 log.info("Hostname resolved: %s", self.client_name)
+                self._emit("network_update")
             except socket.herror as exc:
                 log.warning("Reverse lookup failed: %s", exc)
 
@@ -296,10 +297,8 @@ class NetInfo:
 
         # DNS traffic
         if udp.dport == 53:
-            log.info("DNS server found (dst): %s", ip.dst)
             self._update_dns(ip.dst)
         elif udp.sport == 53:
-            log.info("DNS server found (src): %s", ip.src)
             self._update_dns(ip.src)
 
         # DHCP Request from client (port 67)
