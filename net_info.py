@@ -16,6 +16,7 @@ Improvements over the JS version:
 
 import logging
 import socket
+import subprocess
 import threading
 from typing import Callable
 
@@ -187,6 +188,30 @@ class NetInfo:
         except (ValueError, IndexError):
             return False
 
+    def _on_different_bridge_ports(self, mac1: str, mac2: str) -> bool:
+        """Check that two MACs were learned on different bridge ports.
+        Returns True if they are on different ports (valid client/gateway pair).
+        Returns False if either MAC is not in the bridge table (not physically attached)
+        or if both are on the same port (both coming from the switch side)."""
+        try:
+            result = subprocess.run(
+                ["brctl", "showmacs", self.network_interface],
+                capture_output=True, text=True, timeout=5,
+            )
+            port_map = {}
+            for line in result.stdout.strip().split("\n")[1:]:
+                parts = line.split()
+                if len(parts) >= 3 and parts[2] == "no":
+                    port_map[parts[1].lower()] = parts[0]
+            p1 = port_map.get(mac1.lower())
+            p2 = port_map.get(mac2.lower())
+            if p1 is None or p2 is None:
+                log.debug("MAC not in bridge table: %s=%s, %s=%s", mac1, p1, mac2, p2)
+                return False  # MAC not learned on bridge — not physically attached
+            return p1 != p2
+        except Exception:
+            return True  # brctl failed — accept to avoid blocking detection
+
     def _gateway_search(self, pkt) -> None:
         if not pkt.haslayer(IP) or not pkt.haslayer(Ether):
             return
@@ -208,6 +233,10 @@ class NetInfo:
             if dmac != "ff:ff:ff:ff:ff:ff" and not self._is_multicast_ip(dhost):
                 arp_ip = self.arp_table.entries[smac]
                 if shost != arp_ip:
+                    # verify client and gateway are on different bridge ports
+                    if not self._on_different_bridge_ports(smac, dmac):
+                        log.info("Skipping mismatch: %s and %s on same bridge port (not the real client)", smac, dmac)
+                        return
                     log.info("Gateway detected (src mismatch): GW=%s/%s  Client=%s/%s", arp_ip, smac, dhost, dmac)
                     self._update_value("gateway_ip", arp_ip, "Found Gateway IP from ARP mismatch")
                     self._update_value("gateway_mac", smac, "Found Gateway MAC from ARP mismatch")
@@ -224,6 +253,10 @@ class NetInfo:
             if dmac != "ff:ff:ff:ff:ff:ff" and not self._is_multicast_ip(dhost):
                 arp_ip = self.arp_table.entries[dmac]
                 if dhost != arp_ip:
+                    # verify client and gateway are on different bridge ports
+                    if not self._on_different_bridge_ports(dmac, smac):
+                        log.info("Skipping mismatch: %s and %s on same bridge port (not the real client)", dmac, smac)
+                        return
                     log.info("Gateway detected (dst mismatch): GW=%s/%s  Client=%s/%s", arp_ip, dmac, shost, smac)
                     self._update_value("gateway_ip", arp_ip, "Found Gateway IP from ARP mismatch")
                     self._update_value("gateway_mac", dmac, "Found Gateway MAC from ARP mismatch")
