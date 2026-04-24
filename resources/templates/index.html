@@ -200,6 +200,12 @@
     .toolbar button.btn-danger:hover {
       border-color: var(--red);
     }
+    .toolbar button.btn-warn {
+      color: #e8a317;
+    }
+    .toolbar button.btn-warn:hover {
+      border-color: #e8a317;
+    }
 
     /* ── event log ─────────────────────────────────── */
     #event-log {
@@ -228,6 +234,8 @@
     <button id="btn-dhcp">DHCP Probe</button>
     <button id="btn-internet">Allow Internet</button>
     <button id="btn-resolv">Copy resolv.conf</button>
+    <button id="btn-apply-dns" class="btn-warn">Apply DNS</button>
+    <button id="btn-restore-dns">Restore DNS</button>
     <button id="btn-log">View Log</button>
     <button id="btn-advertise">Advertise Routes</button>
     <button id="btn-flush" class="btn-danger">Flush &amp; Shutdown</button>
@@ -489,6 +497,14 @@
     navigator.clipboard.writeText(rc).then(function () {
       toast('resolv.conf copied to clipboard');
     });
+  });
+  document.getElementById('btn-apply-dns').addEventListener('click', function () {
+    if (confirm('Apply discovered DNS to resolv.conf?\n\nWARNING: This will make ALL Pi system traffic (Tailscale, etc.) visible to corp DNS logging.')) {
+      fetch('/apply_dns', { method: 'POST' }).then(r => r.text()).then(toast);
+    }
+  });
+  document.getElementById('btn-restore-dns').addEventListener('click', function () {
+    fetch('/restore_dns', { method: 'POST' }).then(r => r.text()).then(toast);
   });
   document.getElementById('btn-advertise').addEventListener('click', function () {
     fetch('/advertise_routes', { method: 'POST' }).then(r => r.text()).then(toast);

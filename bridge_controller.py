@@ -310,7 +310,7 @@ class BridgeController:
 
     def flush_tables(self, shutdown: bool = False) -> None:
         oc = self._os_cmd
-        oc("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        self.restore_default_dns()
         oc("Clear ebtables", "ebtables -F")
         oc("Clear ebtables filter", "ebtables -t filter -F")
         oc("Clear ebtables NAT", "ebtables -t nat -F")
@@ -509,21 +509,53 @@ class BridgeController:
             send_dhcp_discover(self.bridge_name, self.net_info.client_mac, self.net_info.client_ip)
 
     def update_dns(self, dns_servers: list[str]) -> None:
-        log.info("Updating DNS: %s", dns_servers)
-        # unlock resolv.conf in case we previously locked it
-        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
-        self._os_cmd("Clear DNS settings", "> /etc/resolv.conf")
+        """Save discovered DNS servers to discovered_dns.conf (NOT resolv.conf).
+
+        resolv.conf stays pointed at 8.8.8.8 (via LTE) so the Pi's own
+        system traffic (Tailscale, etc.) never touches corp DNS.  The
+        discovered servers are saved separately and only used explicitly
+        by the operator (dig, or the Apply DNS button)."""
+        log.info("Discovered DNS: %s", dns_servers)
+        dns_file = Path(__file__).parent / "discovered_dns.conf"
+        with open(dns_file, "w") as f:
+            for server in dns_servers:
+                server = _validate_ip_or_cidr(server)
+                f.write(f"nameserver {server}\n")
+        log.info("Wrote discovered DNS to %s", dns_file)
+        # add routes so corp DNS is reachable through the bridge if needed
         for server in dns_servers:
             server = _validate_ip_or_cidr(server)
-            self._os_cmd(f"Add DNS server {server}", f"echo nameserver {server} >> /etc/resolv.conf")
-            # Route DNS traffic through the bridge virtual gateway —
-            # DNS servers may be outside the private ranges we route by default
             self._os_cmd(
                 f"Route to DNS server {server}",
                 f"ip route replace {server}/32 via {self.virtual_gateway_ip} dev {self.bridge_name}",
             )
-        # lock resolv.conf so Tailscale/dhclient can't overwrite it
+
+    def apply_discovered_dns(self) -> str:
+        """Manually apply discovered DNS servers to /etc/resolv.conf.
+
+        Only call this when the operator explicitly wants the Pi to use
+        corp DNS (e.g. for domain-joined lookups).  This WILL make the
+        Pi's own traffic visible to corp DNS logging."""
+        dns_file = Path(__file__).parent / "discovered_dns.conf"
+        if not dns_file.exists():
+            return "No discovered DNS servers yet"
+        content = dns_file.read_text().strip()
+        if not content:
+            return "No discovered DNS servers yet"
+        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        dns_file = str(Path(__file__).parent / "discovered_dns.conf")
+        self._os_cmd("Write discovered DNS to resolv.conf", f"cp {dns_file} /etc/resolv.conf")
         self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
+        log.warning("OPSEC: resolv.conf now points to corp DNS — Pi system traffic is visible")
+        return f"Applied corp DNS to resolv.conf:\n{content}"
+
+    def restore_default_dns(self) -> str:
+        """Restore resolv.conf to the safe default (8.8.8.8 via LTE)."""
+        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        self._os_cmd("Restore default DNS", "echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
+        self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
+        log.info("resolv.conf restored to 8.8.8.8")
+        return "Restored resolv.conf to nameserver 8.8.8.8"
 
     def new_arp(self, arp_info: dict) -> None:
         ip = arp_info.get("sender_ip") or arp_info.get("ip", "")

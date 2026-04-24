@@ -18,8 +18,18 @@ apt --assume-yes install isc-dhcp-client
 #install other standard software to make life easier
 apt --assume-yes install vim tmux screen zip unzip dnsutils curl
 
+#disable services that leak traffic onto the bridge/corp network
+systemctl disable --now systemd-timesyncd 2>/dev/null || true
+systemctl disable --now apt-daily.timer 2>/dev/null || true
+systemctl disable --now apt-daily-upgrade.timer 2>/dev/null || true
+systemctl disable --now unattended-upgrades 2>/dev/null || true
+
 #force predictable interface names
 ln -sf /dev/null /etc/systemd/network/99-default.link
+
+#set resolv.conf to a safe default (LTE path, not corp network)
+echo 'nameserver 8.8.8.8' > /etc/resolv.conf
+chattr +i /etc/resolv.conf
 
 #set up configs
 cp ./config.yaml ../../

@@ -103,6 +103,16 @@ async def lookup_hostname():
     return "Performing reverse lookup"
 
 
+@app.post("/apply_dns", response_class=PlainTextResponse)
+async def apply_dns():
+    return bridge.apply_discovered_dns()
+
+
+@app.post("/restore_dns", response_class=PlainTextResponse)
+async def restore_dns():
+    return bridge.restore_default_dns()
+
+
 @app.get("/send_dhcp_probe", response_class=PlainTextResponse)
 async def send_dhcp_probe():
     bridge.send_dhcp_probe()
@@ -235,6 +245,29 @@ signal.signal(signal.SIGTERM, _shutdown)
 
 # ── main ─────────────────────────────────────────────────────────────
 
+def _get_bind_host() -> str:
+    """Determine the best IP to bind the web UI to.
+
+    Prefers the Tailscale interface (100.x.x.x), falls back to the
+    management/WiFi subnet (172.31.255.x), and finally localhost.
+    Never binds 0.0.0.0 — that would expose the web UI on the bridge
+    (169.254.x.x) to the corp network."""
+    import netifaces
+    # prefer tailscale, fall back to loopback
+    for iface in netifaces.interfaces():
+        try:
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+            for addr in addrs:
+                ip = addr.get("addr", "")
+                if ip.startswith("100."):       # Tailscale
+                    log.info("Binding web UI to Tailscale IP %s (%s)", ip, iface)
+                    return ip
+        except Exception:
+            continue
+    log.warning("No Tailscale IP found — binding web UI to 127.0.0.1")
+    return "127.0.0.1"
+
+
 def main():
     # start bridge
     bridge.start_bridge()
@@ -243,9 +276,10 @@ def main():
     kb_thread = threading.Thread(target=_keyboard_listener, daemon=True)
     kb_thread.start()
 
-    # start the web server
-    log.info("Starting web server on port 4444")
-    uvicorn.run(sio_app, host="0.0.0.0", port=4444, log_level="info")
+    # start the web server — bind only to management interfaces, never the bridge
+    bind_host = _get_bind_host()
+    log.info("Starting web server on %s:4444", bind_host)
+    uvicorn.run(sio_app, host=bind_host, port=4444, log_level="info")
 
 
 if __name__ == "__main__":
