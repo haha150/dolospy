@@ -44,7 +44,6 @@ def send_dhcp_discover(
             dhcp = DHCP(
                 options=[
                     ("message-type", "discover"),
-                    ("hostname", b"foobar"),
                     ("param_req_list", [1, 3, 6, 15, 26, 42, 119]),  # subnet, router, DNS, domain, MTU, NTP, domain-search
                     "end",
                 ]
