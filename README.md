@@ -12,7 +12,7 @@ Re-implementation of [DolosJS](https://github.com/fkasler/dolosjs) in Python wit
 
 ```
 [Switch] ──eth0──┐                    ┌── usb0 (LTE USB tethering)
-                  ├── mibr (bridge) ──┤         └── Tailscale SSH
+                  ├── mibr (bridge) ──┤         └── Optional Tailscale
 [Victim] ──eth1──┘                    └── wlan0 (optional WiFi hotspot)
 ```
 
@@ -22,7 +22,7 @@ Re-implementation of [DolosJS](https://github.com/fkasler/dolosjs) in Python wit
 4. IP packets are compared against the ARP table — when the Ethernet source MAC maps to a different IP than the IP header claims, the gateway is identified (it's forwarding someone else's traffic)
 5. Once gateway and client are identified, ebtables/iptables rules masquerade bridge traffic as the client toward the switch and as the gateway toward the client
 6. 802.1X EAPOL frames are forwarded transparently so the victim's authentication stays active
-7. The operator accesses the bridge device remotely via Tailscale over LTE
+7. The operator accesses the bridge device remotely via Tailscale over LTE (or via WiFi hotspot / direct SSH)
 
 ## Requirements
 
@@ -48,15 +48,17 @@ cd /root/dolospy/setup/lte_mgmt
 sudo bash setup.sh
 ```
 
-This installs all dependencies: Python 3, pip, bridge-utils, iptables, ebtables, arptables, Tailscale, isc-dhcp-client, tmux, and the Python packages (fastapi, uvicorn, python-socketio, scapy, pyyaml).
+This installs all dependencies: Python 3, pip, bridge-utils, iptables, ebtables, arptables, isc-dhcp-client, tmux, and the Python packages (fastapi, uvicorn, python-socketio, scapy, pyyaml, netifaces). It also disables services that could leak traffic (systemd-timesyncd, apt auto-updates, unattended-upgrades) and sets `/etc/resolv.conf` to `8.8.8.8` as a safe default.
 
-### 2. Authenticate Tailscale
+Tailscale is also installed by the setup script but is **optional** — the core bridge/NAC bypass works without it. If Tailscale is not available, the web UI binds to `127.0.0.1` (accessible via SSH tunnel or WiFi hotspot).
+
+### 2. (Optional) Authenticate Tailscale
 
 ```bash
 sudo tailscale up --ssh --accept-dns=false
 ```
 
-The `--accept-dns=false` flag prevents Tailscale from overwriting `/etc/resolv.conf` with its MagicDNS resolver. DolosPy needs to write the target network's DNS servers there.
+The `--accept-dns=false` flag prevents Tailscale from overwriting `/etc/resolv.conf`.
 
 Follow the URL to authenticate your device to your Tailnet. This only needs to be done once — Tailscale auto-reconnects on subsequent boots.
 
@@ -127,7 +129,7 @@ sudo tmux attach -t dolospy
 
 ### Web UI
 
-Access the dashboard at `http://<device-ip>:4444` (via Tailscale IP or WiFi hotspot IP).
+Access the dashboard at `http://<device-ip>:4444`. The web UI binds to the Tailscale IP (`100.x.x.x`) if available, otherwise `127.0.0.1`. It **never** binds to `0.0.0.0`, so it is not exposed on the bridge interface to the corp network.
 
 The web UI shows:
 - **Status badge**: Waiting (orange) → Ready (green) when bypass is active
@@ -143,13 +145,15 @@ The web UI shows:
 
 | Button | Action |
 |--------|--------|
-| **Lookup Hostname** | Reverse DNS lookup on the client IP |
+| **Lookup Hostname** | Reverse DNS lookup on the client IP (uses `dig` against discovered corp DNS, does not change system resolver) |
 | **DHCP Probe** | Send a spoofed DHCP Discover to provoke DHCP info |
 | **Allow Internet** | Add a default route through the bridge (routes your traffic through the victim's gateway) |
 | **Copy resolv.conf** | Copy discovered DNS config to clipboard |
+| **Apply DNS** | Apply discovered corp DNS to `/etc/resolv.conf` (with opsec warning — makes Pi system traffic visible to corp DNS) |
+| **Restore DNS** | Restore `/etc/resolv.conf` to the safe default (`8.8.8.8`) |
 | **View Log** | Open the current command log in a new tab |
 | **Advertise Routes** | Tell Tailscale to advertise the discovered subnet to your Tailnet |
-| **Flush & Shutdown** | Flush all rules, tear down bridge, and exit (with confirmation) |
+| **Flush & Shutdown** | Flush all rules, restore DNS to `8.8.8.8`, tear down bridge, and exit (with confirmation) |
 
 ### Keyboard Shortcuts
 
@@ -298,10 +302,16 @@ DolosPy takes several measures to stay invisible on the network:
 - **ARP suppression** — bridge has `arp off`, all ARP output is dropped by arptables
 - **MAC spoofing** — all outbound frames are rewritten to match the client/gateway MAC via ebtables SNAT
 - **TTL spoofing** — iptables mangle matches the client's original TTL to defeat OS fingerprinting
-- **resolv.conf locked** — `chattr +i` prevents Tailscale/dhclient from overwriting discovered DNS servers
+- **DNS isolation** — `/etc/resolv.conf` defaults to `8.8.8.8` (via LTE), so Pi system traffic (Tailscale, etc.) never touches corp DNS. Discovered corp DNS is saved to `discovered_dns.conf` and only used explicitly by the operator
+- **Hostname lookup via dig** — reverse DNS uses `dig @<corp_dns>` directly, keeping the system resolver untouched
+- **NTP disabled** — `systemd-timesyncd` is disabled during setup to prevent NTP queries leaking onto the bridge
+- **Apt auto-updates disabled** — `apt-daily.timer`, `apt-daily-upgrade.timer`, and `unattended-upgrades` are disabled to prevent package manager traffic leaking onto the corp network
+- **DHCP probe sends no hostname** — the DHCP Discover omits the hostname option to avoid fingerprinting
+- **Web UI not exposed on bridge** — binds to Tailscale IP or `127.0.0.1`, never `0.0.0.0`
 - **Tailscale --accept-dns=false** — prevents MagicDNS from hijacking system DNS
 - **ARP keepalive** — gratuitous ARPs every 30s keep the gateway's ARP cache alive when the client sleeps
 - **EAPOL passthrough** — 802.1X frames forwarded transparently (`group_fwd_mask = 8`)
+- **Flush & Shutdown restores DNS** — `/etc/resolv.conf` is restored to `8.8.8.8` on shutdown
 - **No LLDP/CDP** — verify `lldpd` is not running: `systemctl disable lldpd 2>/dev/null`
 
 ### Limitations
