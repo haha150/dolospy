@@ -120,6 +120,27 @@ async def sync_time_endpoint():
     return _sync_time()
 
 
+@app.get("/timezone", response_class=JSONResponse)
+async def get_timezone():
+    return {"timezone": _get_current_timezone(), "timezones": _COMMON_TIMEZONES}
+
+
+@app.post("/timezone", response_class=PlainTextResponse)
+async def set_timezone(request: Request):
+    data = await request.json()
+    tz = data.get("timezone", "").strip()
+    if not tz or tz not in _COMMON_TIMEZONES:
+        return "Invalid timezone"
+    result = subprocess.run(
+        ["timedatectl", "set-timezone", tz],
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode == 0:
+        log.info("Timezone set to %s", tz)
+        return f"Timezone set: {tz}"
+    return f"Failed: {result.stderr.strip()}"
+
+
 @app.get("/reboot_schedule", response_class=JSONResponse)
 async def get_reboot_schedule():
     return _read_reboot_cron()
@@ -320,6 +341,31 @@ signal.signal(signal.SIGTERM, _shutdown)
 _TIME_SYNC_URLS = ["1.1.1.1", "1.0.0.1", "www.google.com"]
 _time_sync_stop = threading.Event()
 
+_COMMON_TIMEZONES = [
+    "Europe/Stockholm", "Europe/London", "Europe/Berlin", "Europe/Paris",
+    "Europe/Amsterdam", "Europe/Helsinki", "Europe/Oslo", "Europe/Copenhagen",
+    "Europe/Zurich", "Europe/Madrid", "Europe/Rome", "Europe/Warsaw",
+    "Europe/Athens", "Europe/Bucharest", "Europe/Moscow",
+    "US/Eastern", "US/Central", "US/Mountain", "US/Pacific",
+    "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai",
+    "Australia/Sydney", "Pacific/Auckland",
+    "UTC",
+]
+
+
+def _get_current_timezone() -> str:
+    """Read the current system timezone."""
+    try:
+        result = subprocess.run(
+            ["timedatectl", "show", "--property=Timezone", "--value"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "UTC"
+
 
 def _sync_time() -> str:
     """Sync system clock from HTTP Date header.
@@ -339,16 +385,20 @@ def _sync_time() -> str:
             conn.close()
             if not date_str:
                 continue
-            # parse RFC 2822 date and set system clock
+            # parse RFC 2822 date (UTC) and set system clock
             parsed = email.utils.parsedate_to_datetime(date_str)
             time_str = parsed.strftime("%Y-%m-%d %H:%M:%S")
             result = subprocess.run(
-                ["date", "-s", time_str],
+                ["date", "-u", "-s", time_str],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
-                log.info("Time synced from %s: %s", host, time_str)
-                return f"Time synced: {time_str} (from {host})"
+                local_time = subprocess.run(
+                    ["date", "+%Y-%m-%d %H:%M:%S %Z"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                log.info("Time synced from %s: %s (UTC) → %s", host, time_str, local_time)
+                return f"Time synced: {local_time} (from {host})"
             else:
                 log.warning("date -s failed: %s", result.stderr.strip())
         except Exception as exc:

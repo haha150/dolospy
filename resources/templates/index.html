@@ -298,7 +298,7 @@
   <!-- Scheduled Reboot -->
   <div class="card">
     <div class="card-title">Scheduled Reboot</div>
-    <div class="card-body">
+    <div class="card-body" style="display:flex;flex-direction:column;gap:0.65rem">
       <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
           <input type="checkbox" id="reboot-enabled">
@@ -314,6 +314,19 @@
           padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;
         ">Save</button>
         <span id="reboot-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="font-size:0.82rem;color:var(--text-dim)">Timezone:</label>
+        <select id="tz-select" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;
+        "></select>
+        <button id="btn-set-tz" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.3rem 0.6rem;border-radius:6px;cursor:pointer;font-size:0.78rem;
+        ">Set</button>
+        <span id="tz-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
       </div>
     </div>
   </div>
@@ -656,6 +669,30 @@
       document.getElementById('reboot-status').textContent = enabled ? 'Reboot at ' + h + ':' + m : 'Disabled';
     });
   });
+
+  // ── timezone ───────────────────────────────────────
+  var tzSelect = document.getElementById('tz-select');
+  fetch('/timezone').then(function (r) { return r.json(); }).then(function (d) {
+    d.timezones.forEach(function (tz) {
+      var opt = document.createElement('option');
+      opt.value = tz;
+      opt.textContent = tz;
+      if (tz === d.timezone) opt.selected = true;
+      tzSelect.appendChild(opt);
+    });
+    document.getElementById('tz-status').textContent = d.timezone;
+  });
+  document.getElementById('btn-set-tz').addEventListener('click', function () {
+    fetch('/timezone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone: tzSelect.value })
+    }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      document.getElementById('tz-status').textContent = tzSelect.value;
+    });
+  });
+
   // ── traffic capture ──────────────────────────────
   var capFilterSelect = document.getElementById('cap-filter');
   var capCustomInput = document.getElementById('cap-custom-filter');
