@@ -12,7 +12,7 @@ Re-implementation of [DolosJS](https://github.com/fkasler/dolosjs) in Python wit
 
 ```
 [Switch] ──eth0──┐                    ┌── usb0 (LTE USB tethering)
-                  ├── mibr (bridge) ──┤         └── Optional Tailscale
+                  ├── mibr (bridge) ──┤         └── Tailscale (optional)
 [Victim] ──eth1──┘                    └── wlan0 (optional WiFi hotspot)
 ```
 
@@ -28,7 +28,7 @@ Re-implementation of [DolosJS](https://github.com/fkasler/dolosjs) in Python wit
 
 ### Hardware
 
-- Single-board computer with **2 Ethernet ports** (e.g., NanoPi R2S, Raspberry Pi 5 with USB Ethernet adapter)
+- Single-board computer with **2 Ethernet ports** (e.g., NanoPi R3S, Raspberry Pi 5 with USB Ethernet adapter)
 - **LTE USB modem** or phone with USB tethering for remote management
 - Two Ethernet cables
 
@@ -48,7 +48,7 @@ cd /root/dolospy/setup/lte_mgmt
 sudo bash setup.sh
 ```
 
-This installs all dependencies: Python 3, pip, bridge-utils, iptables, ebtables, arptables, isc-dhcp-client, tmux, and the Python packages (fastapi, uvicorn, python-socketio, scapy, pyyaml, netifaces). It also disables services that could leak traffic (systemd-timesyncd, apt auto-updates, unattended-upgrades) and sets `/etc/resolv.conf` to `8.8.8.8` as a safe default.
+This installs all dependencies: Python 3, pip, bridge-utils, iptables, ebtables, arptables, isc-dhcp-client, tmux, and the Python packages (fastapi, uvicorn, python-socketio, scapy, pyyaml, netifaces). It also disables services that could leak traffic (systemd-resolved, systemd-timesyncd, apt auto-updates, unattended-upgrades) and sets `/etc/resolv.conf` to `8.8.8.8` as a safe default.
 
 Tailscale is also installed by the setup script but is **optional** — the core bridge/NAC bypass works without it. If Tailscale is not available, the web UI binds to `127.0.0.1` (accessible via SSH tunnel or WiFi hotspot).
 
@@ -103,6 +103,11 @@ management_subnet: "172.31.255.0/24"  # subnet for WiFi AP / management traffic 
 replace_default_route: false    # keep false for LTE — don't replace the LTE route
 run_command_on_success: false   # run a command after spoofing is configured
 autorun_command: ""             # command to run on success
+webui_port: 4444                # web UI port (default: 4444)
+
+# Traffic capture (optional — managed via web UI)
+# capture_max_size_mb: 500            # max disk usage for pcap files
+# capture_offload_target: "user@host:/path/"  # SCP destination for offloading
 ```
 
 **`replace_default_route`**: Set to `false` when using LTE for remote access (default). Set to `true` if the bridge is your only network path and you want the default route to go through the victim's gateway.
@@ -134,12 +139,14 @@ Access the dashboard at `http://<device-ip>:4444`. The web UI binds to the Tails
 The web UI shows:
 - **Status badge**: Waiting (orange) → Ready (green) when bypass is active
 - **Connection indicator**: green/red dot showing Socket.IO connection state
-- **Uptime counter**: time since bridge started
+- **Uptime counter**: device uptime (from `/proc/uptime`)
 - **Host/Client card**: discovered client IP, MAC, hostname, TTL
 - **Gateway/Network card**: gateway IP, MAC, subnet mask, domain, DHCP server, NTP server
 - **DNS Servers table**: discovered DNS servers
 - **ARP Neighbors table**: all MAC/IP pairs seen on the bridge, with vendor lookup
 - **Event Log**: real-time log of bridge events
+- **Scheduled Reboot**: configure a daily reboot time via cron
+- **Traffic Capture**: scheduled/manual pcap capture with filter presets and SCP offloading
 
 ### Web UI Buttons
 
@@ -153,7 +160,32 @@ The web UI shows:
 | **Restore DNS** | Restore `/etc/resolv.conf` to the safe default (`8.8.8.8`) |
 | **View Log** | Open the current command log in a new tab |
 | **Advertise Routes** | Tell Tailscale to advertise the discovered subnet to your Tailnet |
+| **Sync Time** | Sync system clock via HTTP Date headers (replaces NTP — uses LTE path, not bridge) |
 | **Flush & Shutdown** | Flush all rules, restore DNS to `8.8.8.8`, tear down bridge, and exit (with confirmation) |
+
+### Traffic Capture
+
+The Traffic Capture card provides `tcpdump`-based packet capture on the bridge interface.
+
+**Filter presets:**
+
+| Preset | BPF Filter |
+|--------|------------|
+| Cleartext creds | Ports 21, 23, 25, 80, 110, 143, 389, 445 |
+| All traffic | No filter |
+| HTTP | Ports 80, 8080, 8443 |
+| DNS | Port 53 |
+| SMB | Ports 445, 139 |
+| Print jobs | Ports 9100, 631, 515 |
+| Custom | User-supplied BPF expression |
+
+**Scheduled capture** — set a start/end hour window. The scheduler checks every 60 seconds and starts/stops `tcpdump` automatically. A new pcap is created per session.
+
+**Manual capture** — Start Now / Stop buttons override the schedule. A manual capture won't be stopped by the scheduler.
+
+**Storage management** — completed pcaps are automatically compressed to `.pcap.gz`. When total storage exceeds the configured limit (default 500 MB), the oldest files are deleted.
+
+**Offloading** — configure an SCP target (e.g., `user@host:/captures/`) and click Offload to transfer all compressed pcaps. Files are deleted after successful transfer.
 
 ### Keyboard Shortcuts
 
@@ -258,6 +290,7 @@ dolospy/
 ├── dolos.py                 # main entry point — FastAPI + Socket.IO web server
 ├── bridge_controller.py     # bridge lifecycle, iptables/ebtables/arptables rules, ARP keepalive
 ├── net_info.py              # packet sniffing state machine (gateway/TTL/DNS/DHCP discovery)
+├── capture_manager.py       # traffic capture — scheduled tcpdump, compression, SCP offload
 ├── arp_table.py             # ARP sniffer — maintains MAC→IP table
 ├── dhcp_probe.py            # sends spoofed DHCP Discover via scapy
 ├── mac_vendor.py            # MAC prefix → vendor name lookup
@@ -276,6 +309,7 @@ dolospy/
 │   │   ├── finish_setup.sh  # enable boot persistence
 │   │   ├── config.yaml      # default config for LTE setup
 │   │   ├── dolospy.service   # systemd unit file
+│   │   ├── etc_dhcp_dhclient-usb0.conf  # dhclient timeout config for usb0
 │   │   ├── etc_network_interfaces.d_eth0
 │   │   ├── etc_network_interfaces.d_eth1
 │   │   └── etc_NetworkManager_conf.d_99-unmanaged-devices.conf
@@ -287,6 +321,7 @@ dolospy/
 │       ├── etc_default_udhcpd
 │       ├── etc_network_interfaces.d_wlan0
 │       └── etc_systemd_system_udhcpd.service.d_override.conf
+├── captures/                 # created at runtime — pcap/pcap.gz files
 └── logs/                     # created at runtime
     ├── history.log           # persistent log (append)
     └── current.log           # current session log (overwritten each run)
@@ -304,7 +339,9 @@ DolosPy takes several measures to stay invisible on the network:
 - **TTL spoofing** — iptables mangle matches the client's original TTL to defeat OS fingerprinting
 - **DNS isolation** — `/etc/resolv.conf` defaults to `8.8.8.8` (via LTE), so Pi system traffic (Tailscale, etc.) never touches corp DNS. Discovered corp DNS is saved to `discovered_dns.conf` and only used explicitly by the operator
 - **Hostname lookup via dig** — reverse DNS uses `dig @<corp_dns>` directly, keeping the system resolver untouched
+- **systemd-resolved disabled** — prevents the stub resolver from recreating the `/etc/resolv.conf` symlink and sending DNS queries over the bridge
 - **NTP disabled** — `systemd-timesyncd` is disabled during setup to prevent NTP queries leaking onto the bridge
+- **HTTP time sync** — replaces NTP with HTTP Date header parsing over LTE (every 6 hours + manual button), never touches the bridge
 - **Apt auto-updates disabled** — `apt-daily.timer`, `apt-daily-upgrade.timer`, and `unattended-upgrades` are disabled to prevent package manager traffic leaking onto the corp network
 - **DHCP probe sends no hostname** — the DHCP Discover omits the hostname option to avoid fingerprinting
 - **Web UI not exposed on bridge** — binds to Tailscale IP or `127.0.0.1`, never `0.0.0.0`
@@ -312,6 +349,8 @@ DolosPy takes several measures to stay invisible on the network:
 - **ARP keepalive** — gratuitous ARPs every 30s keep the gateway's ARP cache alive when the client sleeps
 - **EAPOL passthrough** — 802.1X frames forwarded transparently (`group_fwd_mask = 8`)
 - **Flush & Shutdown restores DNS** — `/etc/resolv.conf` is restored to `8.8.8.8` on shutdown
+- **Scheduled reboot** — optional daily reboot via cron to recover from stuck states without physical access
+- **Traffic capture storage limits** — auto-compresses pcaps, enforces configurable max disk usage, oldest-first cleanup
 - **No LLDP/CDP** — verify `lldpd` is not running: `systemctl disable lldpd 2>/dev/null`
 
 ### Limitations
