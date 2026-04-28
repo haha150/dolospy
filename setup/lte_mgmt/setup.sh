@@ -20,6 +20,7 @@ apt --assume-yes install vim tmux screen zip unzip dnsutils curl
 
 #disable services that leak traffic onto the bridge/corp network
 systemctl disable --now systemd-timesyncd 2>/dev/null || true
+systemctl disable --now systemd-resolved 2>/dev/null || true
 systemctl disable --now apt-daily.timer 2>/dev/null || true
 systemctl disable --now apt-daily-upgrade.timer 2>/dev/null || true
 systemctl disable --now unattended-upgrades 2>/dev/null || true
@@ -28,6 +29,8 @@ systemctl disable --now unattended-upgrades 2>/dev/null || true
 ln -sf /dev/null /etc/systemd/network/99-default.link
 
 #set resolv.conf to a safe default (LTE path, not corp network)
+# systemd-resolved owns the /etc/resolv.conf symlink — remove it after the service is stopped
+rm -f /etc/resolv.conf
 echo 'nameserver 8.8.8.8' > /etc/resolv.conf
 chattr +i /etc/resolv.conf
 
