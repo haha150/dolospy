@@ -318,6 +318,93 @@
     </div>
   </div>
 
+  <!-- Traffic Capture -->
+  <div class="card">
+    <div class="card-title">Traffic Capture</div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:0.75rem">
+      <!-- Schedule -->
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+          <input type="checkbox" id="cap-schedule-enabled">
+          Scheduled capture
+        </label>
+        <input type="time" id="cap-start-time" value="08:00" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;width:6rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+        <span style="color:var(--text-dim);font-size:0.82rem">to</span>
+        <input type="time" id="cap-end-time" value="17:00" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;width:6rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+      </div>
+      <!-- Filter preset -->
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="font-size:0.82rem;color:var(--text-dim)">Filter:</label>
+        <select id="cap-filter" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+          <option value="cleartext">Cleartext creds</option>
+          <option value="all">All traffic</option>
+          <option value="http">HTTP</option>
+          <option value="dns">DNS</option>
+          <option value="smb">SMB</option>
+          <option value="print">Print jobs</option>
+          <option value="custom">Custom BPF</option>
+        </select>
+        <input type="text" id="cap-custom-filter" placeholder="custom BPF expression" style="
+          display:none;flex:1;min-width:140px;
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+      </div>
+      <!-- Save schedule -->
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <button id="btn-cap-save" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Save Schedule</button>
+        <span id="cap-schedule-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--border)">
+      <!-- Status -->
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <span id="cap-indicator" style="
+          display:inline-flex;align-items:center;gap:0.3rem;font-size:0.82rem;">
+          <span id="cap-dot" style="width:8px;height:8px;border-radius:50%;background:var(--text-dim)"></span>
+          <span id="cap-state">Idle</span>
+        </span>
+        <span style="font-size:0.78rem;color:var(--text-dim)">
+          <span id="cap-files">0</span> files · <span id="cap-size">0</span> / <span id="cap-max-size">500</span> MB
+        </span>
+      </div>
+      <!-- Action buttons -->
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button id="btn-cap-start" style="
+          background:var(--surface);color:var(--green);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Start Now</button>
+        <button id="btn-cap-stop" style="
+          background:var(--surface);color:var(--red);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Stop</button>
+        <button id="btn-cap-offload" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Offload</button>
+      </div>
+      <!-- Offload target -->
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+        <label style="font-size:0.78rem;color:var(--text-dim);white-space:nowrap">SCP target:</label>
+        <input type="text" id="cap-offload-target" placeholder="user@host:/path/" style="
+          flex:1;min-width:160px;
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+        <button id="btn-cap-set-target" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.3rem 0.6rem;border-radius:6px;cursor:pointer;font-size:0.78rem;">Set</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ARP Neighbors -->
   <div class="card full-width">
     <div class="card-title">ARP Neighbors</div>
@@ -568,6 +655,94 @@
       const m = String(minute).padStart(2, '0');
       document.getElementById('reboot-status').textContent = enabled ? 'Reboot at ' + h + ':' + m : 'Disabled';
     });
+  });
+  // ── traffic capture ──────────────────────────────
+  var capFilterSelect = document.getElementById('cap-filter');
+  var capCustomInput = document.getElementById('cap-custom-filter');
+  capFilterSelect.addEventListener('change', function () {
+    capCustomInput.style.display = capFilterSelect.value === 'custom' ? 'block' : 'none';
+  });
+
+  function updateCaptureUI(st) {
+    var dot = document.getElementById('cap-dot');
+    var state = document.getElementById('cap-state');
+    if (st.capturing) {
+      dot.style.background = 'var(--green)';
+      dot.style.boxShadow = '0 0 4px var(--green)';
+      state.textContent = st.manual_override ? 'Capturing (manual)' : 'Capturing';
+    } else {
+      dot.style.background = 'var(--text-dim)';
+      dot.style.boxShadow = 'none';
+      state.textContent = 'Idle';
+    }
+    document.getElementById('cap-files').textContent = st.file_count;
+    document.getElementById('cap-size').textContent = st.total_size_mb;
+    document.getElementById('cap-max-size').textContent = st.max_size_mb;
+  }
+
+  function refreshCaptureStatus() {
+    fetch('/capture/status').then(function (r) { return r.json(); }).then(function (st) {
+      updateCaptureUI(st);
+      document.getElementById('cap-schedule-enabled').checked = st.schedule_enabled;
+      var sh = String(st.schedule_start_hour).padStart(2, '0');
+      var eh = String(st.schedule_end_hour).padStart(2, '0');
+      document.getElementById('cap-start-time').value = sh + ':00';
+      document.getElementById('cap-end-time').value = eh + ':00';
+      capFilterSelect.value = st.filter_preset;
+      capCustomInput.value = st.custom_filter || '';
+      capCustomInput.style.display = st.filter_preset === 'custom' ? 'block' : 'none';
+      document.getElementById('cap-offload-target').value = st.offload_target || '';
+      document.getElementById('cap-schedule-status').textContent =
+        st.schedule_enabled ? sh + ':00\u2013' + eh + ':00 (' + st.filter_preset + ')' : 'Disabled';
+    }).catch(function () {});
+  }
+  refreshCaptureStatus();
+  setInterval(refreshCaptureStatus, 15000);
+
+  document.getElementById('btn-cap-save').addEventListener('click', function () {
+    var startParts = document.getElementById('cap-start-time').value.split(':');
+    var endParts = document.getElementById('cap-end-time').value.split(':');
+    fetch('/capture/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: document.getElementById('cap-schedule-enabled').checked,
+        start_hour: parseInt(startParts[0], 10),
+        end_hour: parseInt(endParts[0], 10),
+        filter_preset: capFilterSelect.value,
+        custom_filter: capCustomInput.value
+      })
+    }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+
+  document.getElementById('btn-cap-start').addEventListener('click', function () {
+    fetch('/capture/start', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-stop').addEventListener('click', function () {
+    fetch('/capture/stop', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-offload').addEventListener('click', function () {
+    toast('Offloading…');
+    fetch('/capture/offload', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-set-target').addEventListener('click', function () {
+    fetch('/capture/offload_target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: document.getElementById('cap-offload-target').value })
+    }).then(function (r) { return r.text(); }).then(toast);
   });
 })();
 </script>

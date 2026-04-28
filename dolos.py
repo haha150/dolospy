@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 import mac_vendor
 from bridge_controller import BridgeController
+from capture_manager import CaptureManager
 
 # ── paths ────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -60,7 +61,8 @@ log.info("Config: %s", json.dumps(config, indent=2))
 
 # ── bridge controller ───────────────────────────────────────────────
 bridge = BridgeController(config)
-
+# ── capture manager ────────────────────────────────────────────
+capture = CaptureManager(bridge_iface="mibr", config=config)
 # ── FastAPI + Socket.IO ──────────────────────────────────────────────
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = FastAPI(title="DolosPy")
@@ -132,6 +134,51 @@ async def set_reboot_schedule(request: Request):
     if hour < 0 or hour > 23 or minute < 0 or minute > 59:
         return "Invalid time"
     return _write_reboot_cron(enabled, hour, minute)
+
+
+# ── capture endpoints ──────────────────────────────────────────
+
+@app.get("/capture/status", response_class=JSONResponse)
+async def capture_status():
+    return capture.get_status()
+
+
+@app.post("/capture/schedule", response_class=PlainTextResponse)
+async def capture_schedule(request: Request):
+    data = await request.json()
+    return capture.update_schedule(
+        enabled=data.get("enabled", False),
+        start_hour=int(data.get("start_hour", 8)),
+        end_hour=int(data.get("end_hour", 17)),
+        filter_preset=data.get("filter_preset", "cleartext"),
+        custom_filter=data.get("custom_filter", ""),
+    )
+
+
+@app.post("/capture/start", response_class=PlainTextResponse)
+async def capture_start():
+    return capture.start_capture(manual=True)
+
+
+@app.post("/capture/stop", response_class=PlainTextResponse)
+async def capture_stop():
+    return capture.stop_capture()
+
+
+@app.post("/capture/offload", response_class=PlainTextResponse)
+async def capture_offload():
+    return capture.offload()
+
+
+@app.post("/capture/offload_target", response_class=PlainTextResponse)
+async def capture_offload_target(request: Request):
+    data = await request.json()
+    return capture.update_offload_target(data.get("target", ""))
+
+
+@app.get("/capture/files", response_class=JSONResponse)
+async def capture_files():
+    return capture.list_files()
 
 
 @app.get("/send_dhcp_probe", response_class=PlainTextResponse)
@@ -421,6 +468,9 @@ def _get_bind_host() -> str:
 def main():
     # start bridge
     bridge.start_bridge()
+
+    # start capture scheduler (does nothing until enabled via UI)
+    capture.start_scheduler()
 
     # start background time sync (replaces NTP)
     _start_time_sync_thread()

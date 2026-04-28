@@ -6,3 +6,4 @@ venv/
 logs/*.log
 !logs/.gitignore
 discovered_dns.conf
+captures/
