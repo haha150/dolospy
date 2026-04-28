@@ -34,6 +34,7 @@ chattr +i /etc/resolv.conf
 #set up configs
 cp ./config.yaml ../../
 cp ./dolospy.service /etc/systemd/system/dolospy.service
+cp ./etc_dhcp_dhclient-usb0.conf /etc/dhcp/dhclient-usb0.conf
 
 #reload the daemons
 systemctl daemon-reload

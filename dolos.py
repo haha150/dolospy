@@ -113,6 +113,27 @@ async def restore_dns():
     return bridge.restore_default_dns()
 
 
+@app.post("/sync_time", response_class=PlainTextResponse)
+async def sync_time_endpoint():
+    return _sync_time()
+
+
+@app.get("/reboot_schedule", response_class=JSONResponse)
+async def get_reboot_schedule():
+    return _read_reboot_cron()
+
+
+@app.post("/reboot_schedule", response_class=PlainTextResponse)
+async def set_reboot_schedule(request: Request):
+    data = await request.json()
+    enabled = data.get("enabled", False)
+    hour = int(data.get("hour", 3))
+    minute = int(data.get("minute", 0))
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return "Invalid time"
+    return _write_reboot_cron(enabled, hour, minute)
+
+
 @app.get("/send_dhcp_probe", response_class=PlainTextResponse)
 async def send_dhcp_probe():
     bridge.send_dhcp_probe()
@@ -126,9 +147,13 @@ async def get_vendor(mac_addr: str = Query(...)):
 
 @app.get("/uptime", response_class=JSONResponse)
 async def uptime():
-    if bridge.bridge_start_time:
-        return {"start_time": bridge.bridge_start_time, "uptime": time.time() - bridge.bridge_start_time}
-    return {"start_time": 0, "uptime": 0}
+    """Return device uptime in seconds (from /proc/uptime, not bridge start)."""
+    try:
+        with open("/proc/uptime") as f:
+            uptime_secs = float(f.read().split()[0])
+        return {"uptime_seconds": uptime_secs}
+    except Exception:
+        return {"uptime_seconds": 0}
 
 
 @app.post("/flush_tables", response_class=PlainTextResponse)
@@ -243,6 +268,131 @@ signal.signal(signal.SIGINT, _shutdown)
 signal.signal(signal.SIGTERM, _shutdown)
 
 
+# ── time sync (HTTP Date header) ─────────────────────────────────
+
+_TIME_SYNC_URLS = ["1.1.1.1", "1.0.0.1", "www.google.com"]
+_time_sync_stop = threading.Event()
+
+
+def _sync_time() -> str:
+    """Sync system clock from HTTP Date header.
+
+    Uses HEAD requests over LTE (not the bridge) to public servers.
+    Binds to the LTE source IP to ensure traffic never goes over the bridge,
+    even if the default route has been changed."""
+    import email.utils
+    import http.client
+
+    for host in _TIME_SYNC_URLS:
+        try:
+            conn = http.client.HTTPConnection(host, timeout=5, source_address=(_get_lte_source_ip(), 0))
+            conn.request("HEAD", "/")
+            resp = conn.getresponse()
+            date_str = resp.getheader("Date")
+            conn.close()
+            if not date_str:
+                continue
+            # parse RFC 2822 date and set system clock
+            parsed = email.utils.parsedate_to_datetime(date_str)
+            time_str = parsed.strftime("%Y-%m-%d %H:%M:%S")
+            result = subprocess.run(
+                ["date", "-s", time_str],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                log.info("Time synced from %s: %s", host, time_str)
+                return f"Time synced: {time_str} (from {host})"
+            else:
+                log.warning("date -s failed: %s", result.stderr.strip())
+        except Exception as exc:
+            log.debug("Time sync from %s failed: %s", host, exc)
+            continue
+    log.warning("Time sync failed — all servers unreachable")
+    return "Time sync failed — no servers reachable"
+
+
+def _get_lte_source_ip() -> str:
+    """Get the IP of the LTE/USB interface to use as source for time sync.
+    Falls back to 0.0.0.0 (OS chooses) if no LTE interface found."""
+    import netifaces
+    # look for usb0, wwan0, or any non-bridge, non-tailscale, non-loopback interface
+    for iface in ["usb0", "wwan0"]:
+        try:
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+            if addrs:
+                return addrs[0]["addr"]
+        except (ValueError, KeyError):
+            continue
+    return "0.0.0.0"
+
+
+def _start_time_sync_thread() -> None:
+    """Background thread that syncs time every 6 hours."""
+    def _loop():
+        # initial sync after 30s (wait for LTE to come up)
+        _time_sync_stop.wait(30)
+        while not _time_sync_stop.is_set():
+            _sync_time()
+            _time_sync_stop.wait(6 * 3600)  # every 6 hours
+    t = threading.Thread(target=_loop, daemon=True, name="time-sync")
+    t.start()
+    log.info("Time sync thread started (every 6h)")
+
+
+# ── reboot schedule (cron) ───────────────────────────────────────────
+
+_CRON_TAG = "# dolospy-scheduled-reboot"
+
+
+def _read_reboot_cron() -> dict:
+    """Read the current scheduled reboot from crontab."""
+    try:
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if _CRON_TAG in line and not line.lstrip().startswith("#"):
+                parts = line.split()
+                return {"enabled": True, "minute": int(parts[0]), "hour": int(parts[1])}
+    except Exception:
+        pass
+    return {"enabled": False, "hour": 3, "minute": 0}
+
+
+def _write_reboot_cron(enabled: bool, hour: int, minute: int) -> str:
+    """Set or remove the scheduled reboot cron entry."""
+    try:
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, timeout=5
+        )
+        existing = result.stdout if result.returncode == 0 else ""
+    except Exception:
+        existing = ""
+
+    # remove any existing dolospy reboot line
+    lines = [l for l in existing.splitlines() if _CRON_TAG not in l]
+
+    if enabled:
+        lines.append(f"{minute} {hour} * * * /sbin/reboot {_CRON_TAG}")
+
+    new_crontab = "\n".join(lines) + "\n" if lines else ""
+    try:
+        proc = subprocess.run(
+            ["crontab", "-"], input=new_crontab, capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode != 0:
+            return f"Failed: {proc.stderr.strip()}"
+    except Exception as exc:
+        return f"Failed: {exc}"
+
+    if enabled:
+        log.info("Scheduled daily reboot at %02d:%02d", hour, minute)
+        return f"Scheduled daily reboot at {hour:02d}:{minute:02d}"
+    else:
+        log.info("Removed scheduled reboot")
+        return "Scheduled reboot disabled"
+
+
 # ── main ─────────────────────────────────────────────────────────────
 
 def _get_bind_host() -> str:
@@ -272,14 +422,18 @@ def main():
     # start bridge
     bridge.start_bridge()
 
+    # start background time sync (replaces NTP)
+    _start_time_sync_thread()
+
     # start keyboard listener in background
     kb_thread = threading.Thread(target=_keyboard_listener, daemon=True)
     kb_thread.start()
 
     # start the web server — bind only to management interfaces, never the bridge
     bind_host = _get_bind_host()
-    log.info("Starting web server on %s:4444", bind_host)
-    uvicorn.run(sio_app, host=bind_host, port=4444, log_level="info")
+    port = config.get("webui_port", 4444)
+    log.info("Starting web server on %s:%d", bind_host, port)
+    uvicorn.run(sio_app, host=bind_host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

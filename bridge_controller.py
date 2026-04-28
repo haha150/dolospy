@@ -543,8 +543,7 @@ class BridgeController:
         if not content:
             return "No discovered DNS servers yet"
         self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
-        dns_file = str(Path(__file__).parent / "discovered_dns.conf")
-        self._os_cmd("Write discovered DNS to resolv.conf", f"cp {dns_file} /etc/resolv.conf")
+        self._os_cmd("Write discovered DNS to resolv.conf", f"cp {str(dns_file)} /etc/resolv.conf")
         self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
         log.warning("OPSEC: resolv.conf now points to corp DNS — Pi system traffic is visible")
         return f"Applied corp DNS to resolv.conf:\n{content}"
