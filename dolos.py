@@ -34,13 +34,34 @@ BASE_DIR = Path(__file__).parent
 RESOURCES = BASE_DIR / "resources"
 TEMPLATES = RESOURCES / "templates"
 LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
 
 # ── logging ──────────────────────────────────────────────────────────
+_LOG_FMT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
+    format=_LOG_FMT,
+    datefmt=_LOG_DATEFMT,
 )
+
+# file handlers — current.log (truncated each run) + history.log (append)
+# scoped to dolos.net_info so discovery events (gateway, client, DNS, TTL)
+# are captured in the log files. dolos.bridge writes via its own _log_to_file.
+_net_info_logger = logging.getLogger("dolos.net_info")
+
+_current_handler = logging.FileHandler(LOG_DIR / "current.log", mode="w")
+_current_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_current_handler.setLevel(logging.INFO)
+
+_history_handler = logging.FileHandler(LOG_DIR / "history.log", mode="a")
+_history_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_history_handler.setLevel(logging.INFO)
+
+_net_info_logger.addHandler(_current_handler)
+_net_info_logger.addHandler(_history_handler)
+
 log = logging.getLogger("dolos")
 
 # ── banner ───────────────────────────────────────────────────────────

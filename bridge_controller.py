@@ -25,6 +25,7 @@ log = logging.getLogger("dolos.bridge")
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+
 _IFACE_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
@@ -74,9 +75,9 @@ class BridgeController:
         # event callbacks
         self._callbacks: dict[str, list[Callable]] = {}
 
-        # logging
+        # logging (append — dolos.py truncates current.log at startup)
         self._history_log = open(LOG_DIR / "history.log", "a")
-        self._current_log = open(LOG_DIR / "current.log", "w")
+        self._current_log = open(LOG_DIR / "current.log", "a")
 
         self.net_info: NetInfo | None = None
 
@@ -150,15 +151,21 @@ class BridgeController:
         path = f"/sys/class/net/{_validate_iface(iface)}/address"
         return Path(path).read_text().strip()
 
+    def _log_to_file(self, line: str) -> None:
+        """Write a timestamped line to both log files."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        entry = f"{ts}  {line}\n"
+        self._history_log.write(entry)
+        self._current_log.write(entry)
+        self._history_log.flush()
+        self._current_log.flush()
+
     def _os_cmd(self, comment: str, cmd: str) -> str:
         log.info("INFO: %s", comment)
         log.info("COMMAND: %s", cmd)
-        self._history_log.write(f"INFO: {comment}\n")
-        self._history_log.write(f"COMMAND: {cmd}\n")
-        self._current_log.write(f"INFO: {comment}\n")
-        self._current_log.write(f"COMMAND: {cmd}\n")
-        self._history_log.flush()
-        self._current_log.flush()
+        self._log_to_file(f"INFO: {comment}")
+        self._log_to_file(f"COMMAND: {cmd}")
         try:
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True, timeout=10
@@ -168,10 +175,7 @@ class BridgeController:
                 output += "\n" + result.stderr.strip()
             if output:
                 log.info("OUTPUT: %s", output)
-                self._history_log.write(f"OUTPUT: {output}\n")
-                self._current_log.write(f"OUTPUT: {output}\n")
-                self._history_log.flush()
-                self._current_log.flush()
+                self._log_to_file(f"OUTPUT: {output}")
             return result.stdout.strip()
         except subprocess.TimeoutExpired:
             log.error("Command timed out: %s", cmd)
@@ -276,14 +280,17 @@ class BridgeController:
         self.net_info.once("client_ip_mac_and_gateway_mac", lambda info: (
             self._emit("bridge_update", {"type": "cimagm", "data": info}),
             self.spoof_client_to_gateway(info),
+            self._log_discovery_summary(),
         ))
         self.net_info.once("gateway_ip_mac_and_client_mac", lambda info: (
             self._emit("bridge_update", {"type": "gimacm", "data": info}),
             self.spoof_gateway_to_client(info),
+            self._log_discovery_summary(),
         ))
         self.net_info.once("client_ttl", lambda info: (
             self._emit("bridge_update", {"type": "client_ttl", "data": info}),
             self.modify_ttl(info),
+            self._log_discovery_summary(),
         ))
 
         self.net_info.start()
@@ -493,6 +500,57 @@ class BridgeController:
         t.start()
         log.info("ARP keepalive started (every 30s) for %s / %s",
                  self._spoofed_client_ip, self._spoofed_client_mac)
+
+    def _log_discovery_summary(self) -> None:
+        """Log a structured summary of all discovered network information.
+        Called after each spoofing phase — only logs if key info is available."""
+        if not self.net_info:
+            return
+        ni = self.net_info
+        # only log the full summary once we have both client and gateway
+        if not ni.client_ip or not ni.gateway_ip:
+            return
+        sep = "=" * 60
+        lines = [
+            "",
+            sep,
+            "  DISCOVERY SUMMARY",
+            sep,
+            "",
+            "  TARGET (Spoofing as):",
+            f"    IP:       {ni.client_ip}",
+            f"    MAC:      {ni.client_mac}",
+            f"    Hostname: {ni.client_name or '(not yet resolved)'}",
+            f"    TTL:      {ni.client_ttl or '(not yet detected)'}",
+            "",
+            "  GATEWAY / NETWORK:",
+            f"    Gateway IP:  {ni.gateway_ip}",
+            f"    Gateway MAC: {ni.gateway_mac}",
+            f"    Subnet:      {ni.subnet_mask or '(unknown)'}",
+            f"    Domain:      {ni.search_domain or '(unknown)'}",
+            f"    DHCP Server: {ni.dhcp_server or '(unknown)'}",
+            f"    NTP Server:  {ni.ntp_server or '(unknown)'}",
+            "",
+            "  DNS SERVERS:",
+        ]
+        if ni.dns_servers:
+            for dns in ni.dns_servers:
+                lines.append(f"    - {dns}")
+        else:
+            lines.append("    (none discovered yet)")
+        lines += [
+            "",
+            "  BRIDGE INTERFACES:",
+            f"    Gateway-side: {self.gateway_side_interface or '(unknown)'}",
+            f"    Client-side:  {self.client_side_interface or '(unknown)'}",
+            "",
+            sep,
+        ]
+        log.info("\n".join(lines))
+        # also write to the manual log files
+        for line in lines:
+            if line:  # skip empty lines used for spacing
+                self._log_to_file(line)
 
     # ── runtime actions ──────────────────────────────────────────────
 
