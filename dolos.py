@@ -126,6 +126,45 @@ async def lookup_hostname():
     return "Performing reverse lookup"
 
 
+@app.post("/spoof_hostname", response_class=PlainTextResponse)
+async def spoof_hostname():
+    """Set the Pi's hostname to match the discovered client hostname."""
+    if not bridge.net_info or not bridge.net_info.client_name:
+        return "No client hostname discovered yet — run Lookup Hostname first"
+    name = bridge.net_info.client_name
+    # strip domain part for the short hostname (e.g. DESKTOP-ABC.corp.local → DESKTOP-ABC)
+    short = name.split(".")[0]
+    if not short or not all(c.isalnum() or c in "-_" for c in short):
+        return "Invalid hostname"
+    try:
+        result = subprocess.run(
+            ["hostnamectl", "set-hostname", short],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return f"Failed: {result.stderr.strip()}"
+        # update /etc/hosts so 127.0.0.1 / 127.0.1.1 resolve the new hostname
+        try:
+            hosts = Path("/etc/hosts").read_text()
+            new_lines = []
+            for line in hosts.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("127.0.0.1"):
+                    new_lines.append(f"127.0.0.1\tlocalhost {short}")
+                elif stripped.startswith("127.0.1.1"):
+                    new_lines.append(f"127.0.1.1\t{short}")
+                else:
+                    new_lines.append(line)
+            Path("/etc/hosts").write_text("\n".join(new_lines) + "\n")
+            log.info("Updated /etc/hosts for %s", short)
+        except Exception as exc:
+            log.warning("Could not update /etc/hosts: %s", exc)
+        log.info("Hostname spoofed to: %s", short)
+        return f"Hostname set to: {short}"
+    except Exception as exc:
+        return f"Failed: {exc}"
+
+
 @app.post("/apply_dns", response_class=PlainTextResponse)
 async def apply_dns():
     return bridge.apply_discovered_dns()

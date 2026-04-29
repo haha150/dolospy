@@ -231,6 +231,7 @@
   </div>
   <div class="toolbar">
     <button id="btn-hostname">Lookup Hostname</button>
+    <button id="btn-spoof-hostname">Spoof Hostname</button>
     <button id="btn-dhcp">DHCP Probe</button>
     <button id="btn-internet">Allow Internet</button>
     <button id="btn-resolv">Copy resolv.conf</button>
@@ -635,6 +636,16 @@
   });
   document.getElementById('btn-sync-time').addEventListener('click', function () {
     fetch('/sync_time', { method: 'POST' }).then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-spoof-hostname').addEventListener('click', function () {
+    var name = document.getElementById('host_name').textContent.trim();
+    if (!name || name === '—') {
+      toast('No hostname discovered yet — run Lookup Hostname first');
+      return;
+    }
+    if (confirm('Set Pi hostname to "' + name.split('.')[0] + '"?')) {
+      fetch('/spoof_hostname', { method: 'POST' }).then(r => r.text()).then(toast);
+    }
   });
   document.getElementById('btn-advertise').addEventListener('click', function () {
     fetch('/advertise_routes', { method: 'POST' }).then(r => r.text()).then(toast);
