@@ -6,7 +6,7 @@ apt update
 apt -y upgrade
 
 #install deps required for DolosPy
-apt --assume-yes install python3 python3-pip python3-venv bridge-utils iptables ebtables arptables network-manager libpcap-dev
+apt --assume-yes install python3 python3-pip python3-venv bridge-utils iptables ebtables arptables network-manager libpcap-dev tcpdump
 
 #install Tailscale
 curl -fsSL https://tailscale.com/install.sh | sh
