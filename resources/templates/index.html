@@ -200,6 +200,12 @@
     .toolbar button.btn-danger:hover {
       border-color: var(--red);
     }
+    .toolbar button.btn-warn {
+      color: #e8a317;
+    }
+    .toolbar button.btn-warn:hover {
+      border-color: #e8a317;
+    }
 
     /* ── event log ─────────────────────────────────── */
     #event-log {
@@ -225,9 +231,13 @@
   </div>
   <div class="toolbar">
     <button id="btn-hostname">Lookup Hostname</button>
+    <button id="btn-spoof-hostname">Spoof Hostname</button>
     <button id="btn-dhcp">DHCP Probe</button>
     <button id="btn-internet">Allow Internet</button>
     <button id="btn-resolv">Copy resolv.conf</button>
+    <button id="btn-apply-dns" class="btn-warn">Apply DNS</button>
+    <button id="btn-restore-dns">Restore DNS</button>
+    <button id="btn-sync-time">Sync Time</button>
     <button id="btn-log">View Log</button>
     <button id="btn-advertise">Advertise Routes</button>
     <button id="btn-flush" class="btn-danger">Flush &amp; Shutdown</button>
@@ -286,6 +296,129 @@
     </div>
   </div>
 
+  <!-- Scheduled Reboot -->
+  <div class="card">
+    <div class="card-title">Scheduled Reboot</div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:0.65rem">
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+          <input type="checkbox" id="reboot-enabled">
+          Enable daily reboot
+        </label>
+        <input type="time" id="reboot-time" value="03:00" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.35rem 0.6rem;font-size:0.85rem;
+          font-family:'Cascadia Code','Fira Code',monospace;
+        ">
+        <button id="btn-save-reboot" class="toolbar" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;
+        ">Save</button>
+        <span id="reboot-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="font-size:0.82rem;color:var(--text-dim)">Timezone:</label>
+        <select id="tz-select" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;
+        "></select>
+        <button id="btn-set-tz" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.3rem 0.6rem;border-radius:6px;cursor:pointer;font-size:0.78rem;
+        ">Set</button>
+        <span id="tz-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Traffic Capture -->
+  <div class="card">
+    <div class="card-title">Traffic Capture</div>
+    <div class="card-body" style="display:flex;flex-direction:column;gap:0.75rem">
+      <!-- Schedule -->
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer">
+          <input type="checkbox" id="cap-schedule-enabled">
+          Scheduled capture
+        </label>
+        <input type="time" id="cap-start-time" value="08:00" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;width:6rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+        <span style="color:var(--text-dim);font-size:0.82rem">to</span>
+        <input type="time" id="cap-end-time" value="17:00" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;width:6rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+      </div>
+      <!-- Filter preset -->
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+        <label style="font-size:0.82rem;color:var(--text-dim)">Filter:</label>
+        <select id="cap-filter" style="
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+          <option value="cleartext">Cleartext creds</option>
+          <option value="all">All traffic</option>
+          <option value="http">HTTP</option>
+          <option value="dns">DNS</option>
+          <option value="smb">SMB</option>
+          <option value="print">Print jobs</option>
+          <option value="custom">Custom BPF</option>
+        </select>
+        <input type="text" id="cap-custom-filter" placeholder="custom BPF expression" style="
+          display:none;flex:1;min-width:140px;
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+      </div>
+      <!-- Save schedule -->
+      <div style="display:flex;align-items:center;gap:0.75rem">
+        <button id="btn-cap-save" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Save Schedule</button>
+        <span id="cap-schedule-status" style="font-size:0.78rem;color:var(--text-dim)"></span>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--border)">
+      <!-- Status -->
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <span id="cap-indicator" style="
+          display:inline-flex;align-items:center;gap:0.3rem;font-size:0.82rem;">
+          <span id="cap-dot" style="width:8px;height:8px;border-radius:50%;background:var(--text-dim)"></span>
+          <span id="cap-state">Idle</span>
+        </span>
+        <span style="font-size:0.78rem;color:var(--text-dim)">
+          <span id="cap-files">0</span> files · <span id="cap-size">0</span> / <span id="cap-max-size">500</span> MB
+        </span>
+      </div>
+      <!-- Action buttons -->
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button id="btn-cap-start" style="
+          background:var(--surface);color:var(--green);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Start Now</button>
+        <button id="btn-cap-stop" style="
+          background:var(--surface);color:var(--red);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Stop</button>
+        <button id="btn-cap-offload" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.35rem 0.8rem;border-radius:6px;cursor:pointer;font-size:0.82rem;">Offload</button>
+      </div>
+      <!-- Offload target -->
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+        <label style="font-size:0.78rem;color:var(--text-dim);white-space:nowrap">SCP target:</label>
+        <input type="text" id="cap-offload-target" placeholder="user@host:/path/" style="
+          flex:1;min-width:160px;
+          background:var(--bg);color:var(--text);border:1px solid var(--border);
+          border-radius:6px;padding:0.3rem 0.5rem;font-size:0.82rem;
+          font-family:'Cascadia Code','Fira Code',monospace;">
+        <button id="btn-cap-set-target" style="
+          background:var(--surface);color:var(--accent);border:1px solid var(--border);
+          padding:0.3rem 0.6rem;border-radius:6px;cursor:pointer;font-size:0.78rem;">Set</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ARP Neighbors -->
   <div class="card full-width">
     <div class="card-title">ARP Neighbors</div>
@@ -309,7 +442,6 @@
   const seenMACs = new Set();
   const seenDNS = new Set();
   let gotFirstInfo = false;
-  let bridgeStartTime = 0;
   let uptimeInterval = null;
 
   // ── connection status ──────────────────────────────
@@ -323,20 +455,24 @@
   });
 
   // ── uptime ─────────────────────────────────────────
-  function startUptimeCounter(startTime) {
+  function startUptimeCounter(initialSeconds) {
     if (uptimeInterval) return;
-    bridgeStartTime = startTime;
-    uptimeInterval = setInterval(function () {
-      const secs = Math.floor(Date.now() / 1000 - bridgeStartTime);
-      const h = String(Math.floor(secs / 3600)).padStart(2, '0');
-      const m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
-      const s = String(secs % 60).padStart(2, '0');
+    let uptimeSecs = Math.floor(initialSeconds);
+    function render() {
+      const h = String(Math.floor(uptimeSecs / 3600)).padStart(2, '0');
+      const m = String(Math.floor((uptimeSecs % 3600) / 60)).padStart(2, '0');
+      const s = String(uptimeSecs % 60).padStart(2, '0');
       document.getElementById('uptime-display').textContent = 'Uptime: ' + h + ':' + m + ':' + s;
+    }
+    render();
+    uptimeInterval = setInterval(function () {
+      uptimeSecs++;
+      render();
     }, 1000);
   }
-  // fetch uptime on load
+  // fetch device uptime on load
   fetch('/uptime').then(r => r.json()).then(function (d) {
-    if (d.start_time > 0) startUptimeCounter(d.start_time);
+    if (d.uptime_seconds > 0) startUptimeCounter(d.uptime_seconds);
   });
 
   function setText(id, val) {
@@ -490,6 +626,27 @@
       toast('resolv.conf copied to clipboard');
     });
   });
+  document.getElementById('btn-apply-dns').addEventListener('click', function () {
+    if (confirm('Apply discovered DNS to resolv.conf?\n\nWARNING: This will make ALL Pi system traffic (Tailscale, etc.) visible to corp DNS logging.')) {
+      fetch('/apply_dns', { method: 'POST' }).then(r => r.text()).then(toast);
+    }
+  });
+  document.getElementById('btn-restore-dns').addEventListener('click', function () {
+    fetch('/restore_dns', { method: 'POST' }).then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-sync-time').addEventListener('click', function () {
+    fetch('/sync_time', { method: 'POST' }).then(r => r.text()).then(toast);
+  });
+  document.getElementById('btn-spoof-hostname').addEventListener('click', function () {
+    var name = document.getElementById('host_name').textContent.trim();
+    if (!name || name === '—') {
+      toast('No hostname discovered yet — run Lookup Hostname first');
+      return;
+    }
+    if (confirm('Set Pi hostname to "' + name.split('.')[0] + '"?')) {
+      fetch('/spoof_hostname', { method: 'POST' }).then(r => r.text()).then(toast);
+    }
+  });
   document.getElementById('btn-advertise').addEventListener('click', function () {
     fetch('/advertise_routes', { method: 'POST' }).then(r => r.text()).then(toast);
   });
@@ -497,6 +654,143 @@
     if (confirm('Flush all tables and shut down? This will stop the bridge and exit DolosPy.')) {
       fetch('/flush_tables', { method: 'POST' }).then(r => r.text()).then(toast);
     }
+  });
+
+  // ── scheduled reboot ───────────────────────────────
+  fetch('/reboot_schedule').then(r => r.json()).then(function (d) {
+    document.getElementById('reboot-enabled').checked = d.enabled;
+    const h = String(d.hour).padStart(2, '0');
+    const m = String(d.minute).padStart(2, '0');
+    document.getElementById('reboot-time').value = h + ':' + m;
+    document.getElementById('reboot-status').textContent = d.enabled ? 'Reboot at ' + h + ':' + m : 'Disabled';
+  });
+  document.getElementById('btn-save-reboot').addEventListener('click', function () {
+    const enabled = document.getElementById('reboot-enabled').checked;
+    const parts = document.getElementById('reboot-time').value.split(':');
+    const hour = parseInt(parts[0], 10);
+    const minute = parseInt(parts[1], 10);
+    fetch('/reboot_schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled, hour: hour, minute: minute })
+    }).then(r => r.text()).then(function (msg) {
+      toast(msg);
+      const h = String(hour).padStart(2, '0');
+      const m = String(minute).padStart(2, '0');
+      document.getElementById('reboot-status').textContent = enabled ? 'Reboot at ' + h + ':' + m : 'Disabled';
+    });
+  });
+
+  // ── timezone ───────────────────────────────────────
+  var tzSelect = document.getElementById('tz-select');
+  fetch('/timezone').then(function (r) { return r.json(); }).then(function (d) {
+    d.timezones.forEach(function (tz) {
+      var opt = document.createElement('option');
+      opt.value = tz;
+      opt.textContent = tz;
+      if (tz === d.timezone) opt.selected = true;
+      tzSelect.appendChild(opt);
+    });
+    document.getElementById('tz-status').textContent = d.timezone;
+  });
+  document.getElementById('btn-set-tz').addEventListener('click', function () {
+    fetch('/timezone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone: tzSelect.value })
+    }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      document.getElementById('tz-status').textContent = tzSelect.value;
+    });
+  });
+
+  // ── traffic capture ──────────────────────────────
+  var capFilterSelect = document.getElementById('cap-filter');
+  var capCustomInput = document.getElementById('cap-custom-filter');
+  capFilterSelect.addEventListener('change', function () {
+    capCustomInput.style.display = capFilterSelect.value === 'custom' ? 'block' : 'none';
+  });
+
+  function updateCaptureUI(st) {
+    var dot = document.getElementById('cap-dot');
+    var state = document.getElementById('cap-state');
+    if (st.capturing) {
+      dot.style.background = 'var(--green)';
+      dot.style.boxShadow = '0 0 4px var(--green)';
+      state.textContent = st.manual_override ? 'Capturing (manual)' : 'Capturing';
+    } else {
+      dot.style.background = 'var(--text-dim)';
+      dot.style.boxShadow = 'none';
+      state.textContent = 'Idle';
+    }
+    document.getElementById('cap-files').textContent = st.file_count;
+    document.getElementById('cap-size').textContent = st.total_size_mb;
+    document.getElementById('cap-max-size').textContent = st.max_size_mb;
+  }
+
+  function refreshCaptureStatus() {
+    fetch('/capture/status').then(function (r) { return r.json(); }).then(function (st) {
+      updateCaptureUI(st);
+      document.getElementById('cap-schedule-enabled').checked = st.schedule_enabled;
+      var sh = String(st.schedule_start_hour).padStart(2, '0');
+      var eh = String(st.schedule_end_hour).padStart(2, '0');
+      document.getElementById('cap-start-time').value = sh + ':00';
+      document.getElementById('cap-end-time').value = eh + ':00';
+      capFilterSelect.value = st.filter_preset;
+      capCustomInput.value = st.custom_filter || '';
+      capCustomInput.style.display = st.filter_preset === 'custom' ? 'block' : 'none';
+      document.getElementById('cap-offload-target').value = st.offload_target || '';
+      document.getElementById('cap-schedule-status').textContent =
+        st.schedule_enabled ? sh + ':00\u2013' + eh + ':00 (' + st.filter_preset + ')' : 'Disabled';
+    }).catch(function () {});
+  }
+  refreshCaptureStatus();
+  setInterval(refreshCaptureStatus, 15000);
+
+  document.getElementById('btn-cap-save').addEventListener('click', function () {
+    var startParts = document.getElementById('cap-start-time').value.split(':');
+    var endParts = document.getElementById('cap-end-time').value.split(':');
+    fetch('/capture/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: document.getElementById('cap-schedule-enabled').checked,
+        start_hour: parseInt(startParts[0], 10),
+        end_hour: parseInt(endParts[0], 10),
+        filter_preset: capFilterSelect.value,
+        custom_filter: capCustomInput.value
+      })
+    }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+
+  document.getElementById('btn-cap-start').addEventListener('click', function () {
+    fetch('/capture/start', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-stop').addEventListener('click', function () {
+    fetch('/capture/stop', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-offload').addEventListener('click', function () {
+    toast('Offloading…');
+    fetch('/capture/offload', { method: 'POST' }).then(function (r) { return r.text(); }).then(function (msg) {
+      toast(msg);
+      refreshCaptureStatus();
+    });
+  });
+  document.getElementById('btn-cap-set-target').addEventListener('click', function () {
+    fetch('/capture/offload_target', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: document.getElementById('cap-offload-target').value })
+    }).then(function (r) { return r.text(); }).then(toast);
   });
 })();
 </script>

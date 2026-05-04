@@ -35,7 +35,8 @@ NM_CONF="/etc/NetworkManager/conf.d/99-unmanaged-devices.conf"
 if grep -q "wlan0" "$NM_CONF" 2>/dev/null; then
     echo "    wlan0 already in unmanaged list"
 else
-    sed -i 's/interface-name:eth0,eth1/interface-name:eth0,eth1,wlan0/' "$NM_CONF"
+    # append wlan0 to whatever interfaces are already listed
+    sed -i '/^unmanaged-devices=/ s/$/,wlan0/' "$NM_CONF"
     echo "    added wlan0 to unmanaged list"
 fi
 

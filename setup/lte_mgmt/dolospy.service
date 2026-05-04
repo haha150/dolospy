@@ -7,7 +7,7 @@ Wants=network.target
 Type=forking
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStartPre=-/sbin/ip link set usb0 up
-ExecStartPre=-/bin/sh -c '/sbin/dhclient -1 -timeout 10 usb0 &'
+ExecStartPre=-/bin/sh -c '/sbin/dhclient -1 -cf /etc/dhcp/dhclient-usb0.conf usb0 &'
 ExecStartPre=-/bin/sleep 5
 ExecStartPre=-/bin/systemctl start tailscaled
 ExecStartPre=-/bin/sh -c '/usr/bin/tailscale up --ssh --accept-dns=false &'

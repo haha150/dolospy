@@ -25,6 +25,7 @@ log = logging.getLogger("dolos.bridge")
 LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+
 _IFACE_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
@@ -74,9 +75,9 @@ class BridgeController:
         # event callbacks
         self._callbacks: dict[str, list[Callable]] = {}
 
-        # logging
+        # logging (append — dolos.py truncates current.log at startup)
         self._history_log = open(LOG_DIR / "history.log", "a")
-        self._current_log = open(LOG_DIR / "current.log", "w")
+        self._current_log = open(LOG_DIR / "current.log", "a")
 
         self.net_info: NetInfo | None = None
 
@@ -150,15 +151,21 @@ class BridgeController:
         path = f"/sys/class/net/{_validate_iface(iface)}/address"
         return Path(path).read_text().strip()
 
+    def _log_to_file(self, line: str) -> None:
+        """Write a timestamped line to both log files."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        entry = f"{ts}  {line}\n"
+        self._history_log.write(entry)
+        self._current_log.write(entry)
+        self._history_log.flush()
+        self._current_log.flush()
+
     def _os_cmd(self, comment: str, cmd: str) -> str:
         log.info("INFO: %s", comment)
         log.info("COMMAND: %s", cmd)
-        self._history_log.write(f"INFO: {comment}\n")
-        self._history_log.write(f"COMMAND: {cmd}\n")
-        self._current_log.write(f"INFO: {comment}\n")
-        self._current_log.write(f"COMMAND: {cmd}\n")
-        self._history_log.flush()
-        self._current_log.flush()
+        self._log_to_file(f"INFO: {comment}")
+        self._log_to_file(f"COMMAND: {cmd}")
         try:
             result = subprocess.run(
                 cmd, shell=True, capture_output=True, text=True, timeout=10
@@ -168,10 +175,7 @@ class BridgeController:
                 output += "\n" + result.stderr.strip()
             if output:
                 log.info("OUTPUT: %s", output)
-                self._history_log.write(f"OUTPUT: {output}\n")
-                self._current_log.write(f"OUTPUT: {output}\n")
-                self._history_log.flush()
-                self._current_log.flush()
+                self._log_to_file(f"OUTPUT: {output}")
             return result.stdout.strip()
         except subprocess.TimeoutExpired:
             log.error("Command timed out: %s", cmd)
@@ -276,14 +280,17 @@ class BridgeController:
         self.net_info.once("client_ip_mac_and_gateway_mac", lambda info: (
             self._emit("bridge_update", {"type": "cimagm", "data": info}),
             self.spoof_client_to_gateway(info),
+            self._log_discovery_summary(),
         ))
         self.net_info.once("gateway_ip_mac_and_client_mac", lambda info: (
             self._emit("bridge_update", {"type": "gimacm", "data": info}),
             self.spoof_gateway_to_client(info),
+            self._log_discovery_summary(),
         ))
         self.net_info.once("client_ttl", lambda info: (
             self._emit("bridge_update", {"type": "client_ttl", "data": info}),
             self.modify_ttl(info),
+            self._log_discovery_summary(),
         ))
 
         self.net_info.start()
@@ -310,7 +317,7 @@ class BridgeController:
 
     def flush_tables(self, shutdown: bool = False) -> None:
         oc = self._os_cmd
-        oc("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        self.restore_default_dns()
         oc("Clear ebtables", "ebtables -F")
         oc("Clear ebtables filter", "ebtables -t filter -F")
         oc("Clear ebtables NAT", "ebtables -t nat -F")
@@ -494,6 +501,57 @@ class BridgeController:
         log.info("ARP keepalive started (every 30s) for %s / %s",
                  self._spoofed_client_ip, self._spoofed_client_mac)
 
+    def _log_discovery_summary(self) -> None:
+        """Log a structured summary of all discovered network information.
+        Called after each spoofing phase — only logs if key info is available."""
+        if not self.net_info:
+            return
+        ni = self.net_info
+        # only log the full summary once we have both client and gateway
+        if not ni.client_ip or not ni.gateway_ip:
+            return
+        sep = "=" * 60
+        lines = [
+            "",
+            sep,
+            "  DISCOVERY SUMMARY",
+            sep,
+            "",
+            "  TARGET (Spoofing as):",
+            f"    IP:       {ni.client_ip}",
+            f"    MAC:      {ni.client_mac}",
+            f"    Hostname: {ni.client_name or '(not yet resolved)'}",
+            f"    TTL:      {ni.client_ttl or '(not yet detected)'}",
+            "",
+            "  GATEWAY / NETWORK:",
+            f"    Gateway IP:  {ni.gateway_ip}",
+            f"    Gateway MAC: {ni.gateway_mac}",
+            f"    Subnet:      {ni.subnet_mask or '(unknown)'}",
+            f"    Domain:      {ni.search_domain or '(unknown)'}",
+            f"    DHCP Server: {ni.dhcp_server or '(unknown)'}",
+            f"    NTP Server:  {ni.ntp_server or '(unknown)'}",
+            "",
+            "  DNS SERVERS:",
+        ]
+        if ni.dns_servers:
+            for dns in ni.dns_servers:
+                lines.append(f"    - {dns}")
+        else:
+            lines.append("    (none discovered yet)")
+        lines += [
+            "",
+            "  BRIDGE INTERFACES:",
+            f"    Gateway-side: {self.gateway_side_interface or '(unknown)'}",
+            f"    Client-side:  {self.client_side_interface or '(unknown)'}",
+            "",
+            sep,
+        ]
+        log.info("\n".join(lines))
+        # also write to the manual log files
+        for line in lines:
+            if line:  # skip empty lines used for spacing
+                self._log_to_file(line)
+
     # ── runtime actions ──────────────────────────────────────────────
 
     def _auto_dhcp_probe(self) -> None:
@@ -509,21 +567,52 @@ class BridgeController:
             send_dhcp_discover(self.bridge_name, self.net_info.client_mac, self.net_info.client_ip)
 
     def update_dns(self, dns_servers: list[str]) -> None:
-        log.info("Updating DNS: %s", dns_servers)
-        # unlock resolv.conf in case we previously locked it
-        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
-        self._os_cmd("Clear DNS settings", "> /etc/resolv.conf")
+        """Save discovered DNS servers to discovered_dns.conf (NOT resolv.conf).
+
+        resolv.conf stays pointed at 8.8.8.8 (via LTE) so the Pi's own
+        system traffic (Tailscale, etc.) never touches corp DNS.  The
+        discovered servers are saved separately and only used explicitly
+        by the operator (dig, or the Apply DNS button)."""
+        log.info("Discovered DNS: %s", dns_servers)
+        dns_file = Path(__file__).parent / "discovered_dns.conf"
+        with open(dns_file, "w") as f:
+            for server in dns_servers:
+                server = _validate_ip_or_cidr(server)
+                f.write(f"nameserver {server}\n")
+        log.info("Wrote discovered DNS to %s", dns_file)
+        # add routes so corp DNS is reachable through the bridge if needed
         for server in dns_servers:
             server = _validate_ip_or_cidr(server)
-            self._os_cmd(f"Add DNS server {server}", f"echo nameserver {server} >> /etc/resolv.conf")
-            # Route DNS traffic through the bridge virtual gateway —
-            # DNS servers may be outside the private ranges we route by default
             self._os_cmd(
                 f"Route to DNS server {server}",
                 f"ip route replace {server}/32 via {self.virtual_gateway_ip} dev {self.bridge_name}",
             )
-        # lock resolv.conf so Tailscale/dhclient can't overwrite it
+
+    def apply_discovered_dns(self) -> str:
+        """Manually apply discovered DNS servers to /etc/resolv.conf.
+
+        Only call this when the operator explicitly wants the Pi to use
+        corp DNS (e.g. for domain-joined lookups).  This WILL make the
+        Pi's own traffic visible to corp DNS logging."""
+        dns_file = Path(__file__).parent / "discovered_dns.conf"
+        if not dns_file.exists():
+            return "No discovered DNS servers yet"
+        content = dns_file.read_text().strip()
+        if not content:
+            return "No discovered DNS servers yet"
+        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        self._os_cmd("Write discovered DNS to resolv.conf", f"cp {str(dns_file)} /etc/resolv.conf")
         self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
+        log.warning("OPSEC: resolv.conf now points to corp DNS — Pi system traffic is visible")
+        return f"Applied corp DNS to resolv.conf:\n{content}"
+
+    def restore_default_dns(self) -> str:
+        """Restore resolv.conf to the safe default (8.8.8.8 via LTE)."""
+        self._os_cmd("Unlock resolv.conf", "chattr -i /etc/resolv.conf")
+        self._os_cmd("Restore default DNS", "echo 'nameserver 8.8.8.8' > /etc/resolv.conf")
+        self._os_cmd("Lock resolv.conf", "chattr +i /etc/resolv.conf")
+        log.info("resolv.conf restored to 8.8.8.8")
+        return "Restored resolv.conf to nameserver 8.8.8.8"
 
     def new_arp(self, arp_info: dict) -> None:
         ip = arp_info.get("sender_ip") or arp_info.get("ip", "")

@@ -27,19 +27,41 @@ from fastapi.staticfiles import StaticFiles
 
 import mac_vendor
 from bridge_controller import BridgeController
+from capture_manager import CaptureManager
 
 # ── paths ────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 RESOURCES = BASE_DIR / "resources"
 TEMPLATES = RESOURCES / "templates"
 LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
 
 # ── logging ──────────────────────────────────────────────────────────
+_LOG_FMT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
+    format=_LOG_FMT,
+    datefmt=_LOG_DATEFMT,
 )
+
+# file handlers — current.log (truncated each run) + history.log (append)
+# scoped to dolos.net_info so discovery events (gateway, client, DNS, TTL)
+# are captured in the log files. dolos.bridge writes via its own _log_to_file.
+_net_info_logger = logging.getLogger("dolos.net_info")
+
+_current_handler = logging.FileHandler(LOG_DIR / "current.log", mode="w")
+_current_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_current_handler.setLevel(logging.INFO)
+
+_history_handler = logging.FileHandler(LOG_DIR / "history.log", mode="a")
+_history_handler.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATEFMT))
+_history_handler.setLevel(logging.INFO)
+
+_net_info_logger.addHandler(_current_handler)
+_net_info_logger.addHandler(_history_handler)
+
 log = logging.getLogger("dolos")
 
 # ── banner ───────────────────────────────────────────────────────────
@@ -60,7 +82,8 @@ log.info("Config: %s", json.dumps(config, indent=2))
 
 # ── bridge controller ───────────────────────────────────────────────
 bridge = BridgeController(config)
-
+# ── capture manager ────────────────────────────────────────────
+capture = CaptureManager(bridge_iface="mibr", config=config)
 # ── FastAPI + Socket.IO ──────────────────────────────────────────────
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 app = FastAPI(title="DolosPy")
@@ -103,6 +126,142 @@ async def lookup_hostname():
     return "Performing reverse lookup"
 
 
+@app.post("/spoof_hostname", response_class=PlainTextResponse)
+async def spoof_hostname():
+    """Set the Pi's hostname to match the discovered client hostname."""
+    if not bridge.net_info or not bridge.net_info.client_name:
+        return "No client hostname discovered yet — run Lookup Hostname first"
+    name = bridge.net_info.client_name
+    # strip domain part for the short hostname (e.g. DESKTOP-ABC.corp.local → DESKTOP-ABC)
+    short = name.split(".")[0]
+    if not short or not all(c.isalnum() or c in "-_" for c in short):
+        return "Invalid hostname"
+    try:
+        result = subprocess.run(
+            ["hostnamectl", "set-hostname", short],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return f"Failed: {result.stderr.strip()}"
+        # update /etc/hosts so 127.0.0.1 / 127.0.1.1 resolve the new hostname
+        try:
+            hosts = Path("/etc/hosts").read_text()
+            new_lines = []
+            for line in hosts.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("127.0.0.1"):
+                    new_lines.append(f"127.0.0.1\tlocalhost {short}")
+                elif stripped.startswith("127.0.1.1"):
+                    new_lines.append(f"127.0.1.1\t{short}")
+                else:
+                    new_lines.append(line)
+            Path("/etc/hosts").write_text("\n".join(new_lines) + "\n")
+            log.info("Updated /etc/hosts for %s", short)
+        except Exception as exc:
+            log.warning("Could not update /etc/hosts: %s", exc)
+        log.info("Hostname spoofed to: %s", short)
+        return f"Hostname set to: {short}"
+    except Exception as exc:
+        return f"Failed: {exc}"
+
+
+@app.post("/apply_dns", response_class=PlainTextResponse)
+async def apply_dns():
+    return bridge.apply_discovered_dns()
+
+
+@app.post("/restore_dns", response_class=PlainTextResponse)
+async def restore_dns():
+    return bridge.restore_default_dns()
+
+
+@app.post("/sync_time", response_class=PlainTextResponse)
+async def sync_time_endpoint():
+    return _sync_time()
+
+
+@app.get("/timezone", response_class=JSONResponse)
+async def get_timezone():
+    return {"timezone": _get_current_timezone(), "timezones": _COMMON_TIMEZONES}
+
+
+@app.post("/timezone", response_class=PlainTextResponse)
+async def set_timezone(request: Request):
+    data = await request.json()
+    tz = data.get("timezone", "").strip()
+    if not tz or tz not in _COMMON_TIMEZONES:
+        return "Invalid timezone"
+    result = subprocess.run(
+        ["timedatectl", "set-timezone", tz],
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode == 0:
+        log.info("Timezone set to %s", tz)
+        return f"Timezone set: {tz}"
+    return f"Failed: {result.stderr.strip()}"
+
+
+@app.get("/reboot_schedule", response_class=JSONResponse)
+async def get_reboot_schedule():
+    return _read_reboot_cron()
+
+
+@app.post("/reboot_schedule", response_class=PlainTextResponse)
+async def set_reboot_schedule(request: Request):
+    data = await request.json()
+    enabled = data.get("enabled", False)
+    hour = int(data.get("hour", 3))
+    minute = int(data.get("minute", 0))
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return "Invalid time"
+    return _write_reboot_cron(enabled, hour, minute)
+
+
+# ── capture endpoints ──────────────────────────────────────────
+
+@app.get("/capture/status", response_class=JSONResponse)
+async def capture_status():
+    return capture.get_status()
+
+
+@app.post("/capture/schedule", response_class=PlainTextResponse)
+async def capture_schedule(request: Request):
+    data = await request.json()
+    return capture.update_schedule(
+        enabled=data.get("enabled", False),
+        start_hour=int(data.get("start_hour", 8)),
+        end_hour=int(data.get("end_hour", 17)),
+        filter_preset=data.get("filter_preset", "cleartext"),
+        custom_filter=data.get("custom_filter", ""),
+    )
+
+
+@app.post("/capture/start", response_class=PlainTextResponse)
+async def capture_start():
+    return capture.start_capture(manual=True)
+
+
+@app.post("/capture/stop", response_class=PlainTextResponse)
+async def capture_stop():
+    return capture.stop_capture()
+
+
+@app.post("/capture/offload", response_class=PlainTextResponse)
+async def capture_offload():
+    return capture.offload()
+
+
+@app.post("/capture/offload_target", response_class=PlainTextResponse)
+async def capture_offload_target(request: Request):
+    data = await request.json()
+    return capture.update_offload_target(data.get("target", ""))
+
+
+@app.get("/capture/files", response_class=JSONResponse)
+async def capture_files():
+    return capture.list_files()
+
+
 @app.get("/send_dhcp_probe", response_class=PlainTextResponse)
 async def send_dhcp_probe():
     bridge.send_dhcp_probe()
@@ -116,9 +275,13 @@ async def get_vendor(mac_addr: str = Query(...)):
 
 @app.get("/uptime", response_class=JSONResponse)
 async def uptime():
-    if bridge.bridge_start_time:
-        return {"start_time": bridge.bridge_start_time, "uptime": time.time() - bridge.bridge_start_time}
-    return {"start_time": 0, "uptime": 0}
+    """Return device uptime in seconds (from /proc/uptime, not bridge start)."""
+    try:
+        with open("/proc/uptime") as f:
+            uptime_secs = float(f.read().split()[0])
+        return {"uptime_seconds": uptime_secs}
+    except Exception:
+        return {"uptime_seconds": 0}
 
 
 @app.post("/flush_tables", response_class=PlainTextResponse)
@@ -233,19 +396,204 @@ signal.signal(signal.SIGINT, _shutdown)
 signal.signal(signal.SIGTERM, _shutdown)
 
 
+# ── time sync (HTTP Date header) ─────────────────────────────────
+
+_TIME_SYNC_URLS = ["1.1.1.1", "1.0.0.1", "www.google.com"]
+_time_sync_stop = threading.Event()
+
+_COMMON_TIMEZONES = [
+    "Europe/Stockholm", "Europe/London", "Europe/Berlin", "Europe/Paris",
+    "Europe/Amsterdam", "Europe/Helsinki", "Europe/Oslo", "Europe/Copenhagen",
+    "Europe/Zurich", "Europe/Madrid", "Europe/Rome", "Europe/Warsaw",
+    "Europe/Athens", "Europe/Bucharest", "Europe/Moscow",
+    "US/Eastern", "US/Central", "US/Mountain", "US/Pacific",
+    "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai",
+    "Australia/Sydney", "Pacific/Auckland",
+    "UTC",
+]
+
+
+def _get_current_timezone() -> str:
+    """Read the current system timezone."""
+    try:
+        result = subprocess.run(
+            ["timedatectl", "show", "--property=Timezone", "--value"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "UTC"
+
+
+def _sync_time() -> str:
+    """Sync system clock from HTTP Date header.
+
+    Uses HEAD requests over LTE (not the bridge) to public servers.
+    Binds to the LTE source IP to ensure traffic never goes over the bridge,
+    even if the default route has been changed."""
+    import email.utils
+    import http.client
+
+    for host in _TIME_SYNC_URLS:
+        try:
+            conn = http.client.HTTPConnection(host, timeout=5, source_address=(_get_lte_source_ip(), 0))
+            conn.request("HEAD", "/")
+            resp = conn.getresponse()
+            date_str = resp.getheader("Date")
+            conn.close()
+            if not date_str:
+                continue
+            # parse RFC 2822 date (UTC) and set system clock
+            parsed = email.utils.parsedate_to_datetime(date_str)
+            time_str = parsed.strftime("%Y-%m-%d %H:%M:%S")
+            result = subprocess.run(
+                ["date", "-u", "-s", time_str],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                local_time = subprocess.run(
+                    ["date", "+%Y-%m-%d %H:%M:%S %Z"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                log.info("Time synced from %s: %s (UTC) → %s", host, time_str, local_time)
+                return f"Time synced: {local_time} (from {host})"
+            else:
+                log.warning("date -s failed: %s", result.stderr.strip())
+        except Exception as exc:
+            log.debug("Time sync from %s failed: %s", host, exc)
+            continue
+    log.warning("Time sync failed — all servers unreachable")
+    return "Time sync failed — no servers reachable"
+
+
+def _get_lte_source_ip() -> str:
+    """Get the IP of the LTE/USB interface to use as source for time sync.
+    Falls back to 0.0.0.0 (OS chooses) if no LTE interface found."""
+    import netifaces
+    # look for usb0, wwan0, or any non-bridge, non-tailscale, non-loopback interface
+    for iface in ["usb0", "wwan0"]:
+        try:
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+            if addrs:
+                return addrs[0]["addr"]
+        except (ValueError, KeyError):
+            continue
+    return "0.0.0.0"
+
+
+def _start_time_sync_thread() -> None:
+    """Background thread that syncs time every 6 hours."""
+    def _loop():
+        # initial sync after 30s (wait for LTE to come up)
+        _time_sync_stop.wait(30)
+        while not _time_sync_stop.is_set():
+            _sync_time()
+            _time_sync_stop.wait(6 * 3600)  # every 6 hours
+    t = threading.Thread(target=_loop, daemon=True, name="time-sync")
+    t.start()
+    log.info("Time sync thread started (every 6h)")
+
+
+# ── reboot schedule (cron) ───────────────────────────────────────────
+
+_CRON_TAG = "# dolospy-scheduled-reboot"
+
+
+def _read_reboot_cron() -> dict:
+    """Read the current scheduled reboot from crontab."""
+    try:
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if _CRON_TAG in line and not line.lstrip().startswith("#"):
+                parts = line.split()
+                return {"enabled": True, "minute": int(parts[0]), "hour": int(parts[1])}
+    except Exception:
+        pass
+    return {"enabled": False, "hour": 3, "minute": 0}
+
+
+def _write_reboot_cron(enabled: bool, hour: int, minute: int) -> str:
+    """Set or remove the scheduled reboot cron entry."""
+    try:
+        result = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, timeout=5
+        )
+        existing = result.stdout if result.returncode == 0 else ""
+    except Exception:
+        existing = ""
+
+    # remove any existing dolospy reboot line
+    lines = [l for l in existing.splitlines() if _CRON_TAG not in l]
+
+    if enabled:
+        lines.append(f"{minute} {hour} * * * /sbin/reboot {_CRON_TAG}")
+
+    new_crontab = "\n".join(lines) + "\n" if lines else ""
+    try:
+        proc = subprocess.run(
+            ["crontab", "-"], input=new_crontab, capture_output=True, text=True, timeout=5
+        )
+        if proc.returncode != 0:
+            return f"Failed: {proc.stderr.strip()}"
+    except Exception as exc:
+        return f"Failed: {exc}"
+
+    if enabled:
+        log.info("Scheduled daily reboot at %02d:%02d", hour, minute)
+        return f"Scheduled daily reboot at {hour:02d}:{minute:02d}"
+    else:
+        log.info("Removed scheduled reboot")
+        return "Scheduled reboot disabled"
+
+
 # ── main ─────────────────────────────────────────────────────────────
+
+def _get_bind_host() -> str:
+    """Determine the best IP to bind the web UI to.
+
+    Prefers the Tailscale interface (100.x.x.x), falls back to the
+    management/WiFi subnet (172.31.255.x), and finally localhost.
+    Never binds 0.0.0.0 — that would expose the web UI on the bridge
+    (169.254.x.x) to the corp network."""
+    import netifaces
+    # prefer tailscale, fall back to loopback
+    for iface in netifaces.interfaces():
+        try:
+            addrs = netifaces.ifaddresses(iface).get(netifaces.AF_INET, [])
+            for addr in addrs:
+                ip = addr.get("addr", "")
+                if ip.startswith("100."):       # Tailscale
+                    log.info("Binding web UI to Tailscale IP %s (%s)", ip, iface)
+                    return ip
+        except Exception:
+            continue
+    log.warning("No Tailscale IP found — binding web UI to 127.0.0.1")
+    return "127.0.0.1"
+
 
 def main():
     # start bridge
     bridge.start_bridge()
 
+    # start capture scheduler (does nothing until enabled via UI)
+    capture.start_scheduler()
+
+    # start background time sync (replaces NTP)
+    _start_time_sync_thread()
+
     # start keyboard listener in background
     kb_thread = threading.Thread(target=_keyboard_listener, daemon=True)
     kb_thread.start()
 
-    # start the web server
-    log.info("Starting web server on port 4444")
-    uvicorn.run(sio_app, host="0.0.0.0", port=4444, log_level="info")
+    # start the web server — bind only to management interfaces, never the bridge
+    bind_host = _get_bind_host()
+    port = config.get("webui_port", 4444)
+    log.info("Starting web server on %s:%d", bind_host, port)
+    uvicorn.run(sio_app, host=bind_host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ A transparent Layer 2 bridge is placed inline between a victim device (laptop/pr
 
 3. **Identity spoofing** — ebtables SNAT rewrites all outbound frames from the Pi to use the client's MAC toward the switch and the gateway's MAC toward the client. iptables SNAT rewrites IP source addresses. The Pi effectively becomes invisible — all its traffic looks like it comes from the legitimate client.
 
-4. **Remote access** — LTE USB tethering + Tailscale SSH provides an out-of-band management path that doesn't touch the target network.
+4. **Remote access** — LTE USB tethering + Tailscale SSH provides an out-of-band management path that doesn't touch the target network. Tailscale is optional — the core bridge works without it.
 
 ---
 
@@ -35,6 +35,7 @@ A transparent Layer 2 bridge is placed inline between a victim device (laptop/pr
 |-------|---------------|-----|
 | **DNS lookups failing** | DNS servers outside RFC 1918 ranges (e.g., 129.178.2.1) had no route through the bridge when `replace_default_route=false`. | `update_dns()` adds `ip route replace <dns>/32 via virtual_gw dev mibr` for each discovered DNS server. |
 | **resolv.conf overwritten by Tailscale** | Tailscale's MagicDNS (`--accept-dns`, on by default) overwrites `/etc/resolv.conf` immediately after we write discovered DNS servers. | `--accept-dns=false` on Tailscale. Also `chattr +i /etc/resolv.conf` after writing to prevent any service from overwriting. |
+| **Pi DNS leaked to corp network** | Discovered DNS servers were written directly to `/etc/resolv.conf`, causing all Pi system traffic (Tailscale, dhclient, etc.) to resolve via corp DNS — visible in DNS logs. | `/etc/resolv.conf` defaults to `8.8.8.8` (via LTE). Discovered corp DNS is saved to `discovered_dns.conf` only. Hostname lookups use `dig @<corp_dns>` directly without changing the system resolver. "Apply DNS" / "Restore DNS" buttons allow manual override with opsec warning. Flush & Shutdown auto-restores to `8.8.8.8`. |
 | **DHCP probe missing domain option** | `param_req_list` only requested subnet/router/DNS/MTU/NTP. Didn't ask for option 15 (domain name) or 119 (domain search). | Added options 15 and 119 to the request list. |
 
 ### OPSEC / Safety
@@ -45,6 +46,10 @@ A transparent Layer 2 bridge is placed inline between a victim device (laptop/pr
 | **STP BPDU risk** | Linux bridge STP defaults to off but could be enabled. Enterprise switches with BPDU Guard shut down the port instantly on receiving a BPDU. | Explicit `brctl stp mibr off`. |
 | **Gateway ARP expiry when client sleeps** | Sleeping client can't respond to gateway ARP requests. Gateway drops the ARP entry, return traffic stops flowing. | Gratuitous ARP keepalive every 30s on the gateway-facing interface, spoofing the client's MAC/IP. |
 | **Tailscale killed on dolospy stop** | `ExecStop` in systemd service ran `tailscale down`, killing remote access. | Removed `tailscale down` from ExecStop. Tailscale runs independently as `tailscaled`. |
+| **NTP leaking onto bridge** | `systemd-timesyncd` runs by default and sends NTP queries — after `resolv.conf` rewrite these resolved via corp DNS and routed through the bridge. | `systemd-timesyncd` disabled during setup. |
+| **apt auto-updates leaking** | `apt-daily.timer` and `unattended-upgrades` periodically download package metadata — visible as HTTP/HTTPS traffic from the client IP. | `apt-daily.timer`, `apt-daily-upgrade.timer`, and `unattended-upgrades` disabled during setup. |
+| **DHCP probe hostname fingerprint** | DHCP Discover included `hostname=foobar` — visible to DHCP servers and packet captures. | Hostname option removed entirely from the DHCP Discover. The server doesn't need it to respond. |
+| **Web UI exposed on bridge** | Uvicorn bound to `0.0.0.0:4444`, exposing the FastAPI web UI on the bridge IP (`169.254.66.77`) to the corp network. | Web UI binds to Tailscale IP (`100.x.x.x`) if available, otherwise `127.0.0.1`. Never binds `0.0.0.0`. |
 
 ### Code Quality / Stability
 

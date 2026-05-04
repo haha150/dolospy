@@ -118,13 +118,35 @@ class NetInfo:
         }
 
     def lookup_hostname(self) -> None:
-        """Reverse DNS lookup on client IP. Always overwrites existing hostname
-        since this is user-triggered and reverse DNS is the most authoritative source."""
-        if self.client_ip != "":
+        """Reverse DNS lookup on client IP using discovered corp DNS servers.
+
+        Uses dig against the first discovered DNS server directly, so the
+        query goes through the bridge (as the spoofed client) without
+        changing the Pi's system resolver."""
+        if self.client_ip == "":
+            return
+        dns_server = self.dns_servers[0] if self.dns_servers else None
+        if dns_server:
+            try:
+                result = subprocess.run(
+                    ["dig", "+short", "-x", self.client_ip, f"@{dns_server}"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                name = result.stdout.strip().rstrip(".")
+                if name:
+                    self.client_name = name
+                    log.info("Hostname resolved via dig @%s: %s", dns_server, name)
+                    self._emit("network_update")
+                else:
+                    log.warning("Reverse lookup returned empty (dig @%s -x %s)", dns_server, self.client_ip)
+            except Exception as exc:
+                log.warning("Reverse lookup via dig failed: %s", exc)
+        else:
+            # no corp DNS discovered yet — fall back to system resolver
             try:
                 hosts = socket.gethostbyaddr(self.client_ip)
                 self.client_name = hosts[0]
-                log.info("Hostname resolved: %s", self.client_name)
+                log.info("Hostname resolved via system resolver: %s", self.client_name)
                 self._emit("network_update")
             except socket.herror as exc:
                 log.warning("Reverse lookup failed: %s", exc)
