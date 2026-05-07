@@ -64,6 +64,19 @@ class BridgeController:
         self.run_command_on_success: bool = config.get("run_command_on_success", False)
         self.autorun_command: str = config.get("autorun_command", "")
 
+        # MAC to present on attack NICs (default: Lexmark printer OUI)
+        # Set to "" or remove from config to skip NIC MAC spoofing
+        base_mac = (config.get("spoof_mac") or "").strip().lower()
+        if base_mac:
+            _validate_mac(base_mac)
+            parts = base_mac.split(":")
+            parts[-1] = f"{(int(parts[-1], 16) + 1) & 0xFF:02x}"
+            self.spoof_mac1 = base_mac
+            self.spoof_mac2 = ":".join(parts)
+        else:
+            self.spoof_mac1 = ""
+            self.spoof_mac2 = ""
+
         self.gateway_side_interface: str = ""
         self.client_side_interface: str = ""
 
@@ -221,6 +234,26 @@ class BridgeController:
         # stop NetworkManager from managing attack NICs
         oc(f"Unmanage {self.nic1}", f"nmcli d set {self.nic1} managed no")
         oc(f"Unmanage {self.nic2}", f"nmcli d set {self.nic2} managed no")
+
+        # ── MAC spoofing (pre-bridge) ────────────────────────────────
+        # Bring NICs down and change their MAC addresses BEFORE they join
+        # the bridge and come up.  The hwaddress directive in interfaces.d
+        # already set this at boot, but we re-apply here as defense-in-depth
+        # (in case something reset the MAC).  The two NICs get different
+        # last bytes so the bridge can still distinguish ports.  Once
+        # discovery completes, ebtables SNAT rewrites all outbound frames
+        # to the real client/gateway MAC.
+        if self.spoof_mac1:
+            oc(f"{self.nic1} down for MAC change", f"ip link set dev {self.nic1} down")
+            oc(f"{self.nic2} down for MAC change", f"ip link set dev {self.nic2} down")
+            oc(f"Spoof {self.nic1} MAC → {self.spoof_mac1}", f"ip link set dev {self.nic1} address {self.spoof_mac1}")
+            oc(f"Spoof {self.nic2} MAC → {self.spoof_mac2}", f"ip link set dev {self.nic2} address {self.spoof_mac2}")
+
+            # update the MAC lookup table — ebtables SNAT rules use these
+            self.int_to_mac[self.nic1] = self.spoof_mac1
+            self.int_to_mac[self.nic2] = self.spoof_mac2
+        else:
+            log.info("NIC MAC spoofing disabled (no spoof_mac in config)")
 
         # load kernel modules
         oc("Load arptable_filter", "modprobe arptable_filter")
