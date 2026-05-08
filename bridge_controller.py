@@ -65,28 +65,14 @@ class BridgeController:
         self.autorun_command: str = config.get("autorun_command", "")
 
         # MAC spoofing configuration
-        # spoof_mac = printer MAC set via hwaddress at boot (switch sees this)
-        # During bridge operation we switch to LAA versions (bit 1 of first
-        # octet set) to avoid FDB collision with the real printer on eth1.
-        # Set to "" or remove from config to skip NIC MAC spoofing entirely.
+        # spoof_mac = MAC set via hwaddress at boot so the switch/MAB sees
+        # a known device.  We do NOT change the MAC at runtime — that would
+        # cause a link flap and break the switch port.  Instead we fix the
+        # bridge FDB after creation to avoid collisions with the real device.
         base_mac = (config.get("spoof_mac") or "").strip().lower()
         if base_mac:
             _validate_mac(base_mac)
-            parts = base_mac.split(":")
-            parts[-1] = f"{(int(parts[-1], 16) + 1) & 0xFF:02x}"
-            # boot-time MACs (match hwaddress in interfaces.d)
-            self.boot_mac1 = base_mac
-            self.boot_mac2 = ":".join(parts)
-            # bridge-operation MACs (LAA — won't collide with the real device)
-            self.bridge_nic_mac1 = "02" + base_mac[2:]
-            laa_parts = ["02"] + base_mac.split(":")[1:]
-            laa_parts[-1] = f"{(int(laa_parts[-1], 16) + 1) & 0xFF:02x}"
-            self.bridge_nic_mac2 = ":".join(laa_parts)
-        else:
-            self.boot_mac1 = ""
-            self.boot_mac2 = ""
-            self.bridge_nic_mac1 = ""
-            self.bridge_nic_mac2 = ""
+        self.spoof_mac = base_mac
 
         self.gateway_side_interface: str = ""
         self.client_side_interface: str = ""
@@ -246,38 +232,13 @@ class BridgeController:
         oc(f"Unmanage {self.nic1}", f"nmcli d set {self.nic1} managed no")
         oc(f"Unmanage {self.nic2}", f"nmcli d set {self.nic2} managed no")
 
-        # ── MAC transition (boot → bridge) ──────────────────────────────
-        # At boot, hwaddress set the printer's real MAC on eth0 so the
-        # switch / MAB accepts the port.  Before we create the bridge we
-        # must change to different (LAA) MACs, otherwise the bridge FDB
-        # sees the printer MAC as "local" on eth0 AND "learned" from the
-        # real printer on eth1 — and stops forwarding frames to the printer.
-        #
-        # We try to change the MAC while the NIC is UP (no link flap).
-        # If the driver doesn't support live changes we fall back to
-        # down/set/leave-down (the bridge bring-up section will UP them).
-        if self.boot_mac1:
-            for nic, new_mac in ((self.nic1, self.bridge_nic_mac1),
-                                 (self.nic2, self.bridge_nic_mac2)):
-                current = self._read_mac(nic)
-                if current == new_mac:
-                    log.info("%s already has bridge MAC %s", nic, new_mac)
-                    continue
-                # attempt live MAC change (no link flap)
-                oc(f"Live MAC change {nic} → {new_mac}",
-                   f"ip link set dev {nic} address {new_mac}")
-                if self._read_mac(nic) != new_mac:
-                    log.warning("%s: live MAC change failed, bringing down", nic)
-                    oc(f"{nic} down for MAC change", f"ip link set dev {nic} down")
-                    oc(f"Set {nic} MAC → {new_mac}", f"ip link set dev {nic} address {new_mac}")
-                    # leave down — bridge bring-up section will UP it
-
-            self.int_to_mac[self.nic1] = self.bridge_nic_mac1
-            self.int_to_mac[self.nic2] = self.bridge_nic_mac2
-            log.info("Bridge NICs: %s=%s, %s=%s",
-                     self.nic1, self.bridge_nic_mac1, self.nic2, self.bridge_nic_mac2)
-        else:
-            log.info("NIC MAC spoofing disabled (no spoof_mac in config)")
+        # NOTE: we do NOT change NIC MACs here.  hwaddress in interfaces.d
+        # already set them at boot.  Changing the MAC requires link-down →
+        # link flap → STP reconvergence → broken discovery.
+        if self.spoof_mac:
+            log.info("NIC MACs spoofed at boot via hwaddress: %s=%s, %s=%s",
+                     self.nic1, self.int_to_mac[self.nic1],
+                     self.nic2, self.int_to_mac[self.nic2])
 
         # load kernel modules
         oc("Load arptable_filter", "modprobe arptable_filter")
@@ -301,6 +262,19 @@ class BridgeController:
         # add NICs to bridge
         oc(f"Add {self.nic1} to bridge", f"brctl addif {self.bridge_name} {self.nic1}")
         oc(f"Add {self.nic2} to bridge", f"brctl addif {self.bridge_name} {self.nic2}")
+
+        # Remove local FDB entries for the NIC MACs.  When a NIC joins a
+        # bridge the kernel adds a "permanent local" FDB entry for its MAC.
+        # If that MAC matches the real device on the other port (e.g. we
+        # spoofed the printer's MAC on eth0, and the real printer is on
+        # eth1), the bridge delivers frames to the kernel instead of
+        # forwarding them — breaking transparent pass-through.  The bridge
+        # has its own MAC (00:01:01:01:01:01) for local delivery; the NIC
+        # MACs don't need local entries.
+        for nic in (self.nic1, self.nic2):
+            mac = self.int_to_mac[nic]
+            oc(f"Remove local FDB entry for {nic} ({mac})",
+               f"bridge fdb del {mac} dev {nic} master 2>/dev/null; true")
 
         # configure bridge
         oc("Assign APIPA IP to bridge", f"ip addr add {self.bridge_ip}/16 dev {self.bridge_name}")
