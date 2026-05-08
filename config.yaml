@@ -6,9 +6,6 @@ run_command_on_success: false
 autorun_command: "date > /root/dolospy/cmd_test.txt"
 webui_port: 4444
 
-# MAC address to present on attack NICs at boot (Lexmark printer OUI)
-spoof_mac: "00:11:22:33:44:55"
-
 # Traffic capture (optional — managed via web UI)
 # capture_max_size_mb: 500
 # capture_offload_target: "user@host:/path/"

@@ -1,4 +1,3 @@
-auto eth0
+# No auto — dolospy brings this interface up inside the bridge.
+# This prevents the hardware MAC from ever appearing on the wire.
 iface eth0 inet manual
-    hwaddress ether 00:11:22:33:44:55
-    up ifconfig $IFACE up

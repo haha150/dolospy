@@ -64,16 +64,6 @@ class BridgeController:
         self.run_command_on_success: bool = config.get("run_command_on_success", False)
         self.autorun_command: str = config.get("autorun_command", "")
 
-        # MAC spoofing configuration
-        # spoof_mac = MAC set via hwaddress at boot so the switch/MAB sees
-        # a known device.  We do NOT change the MAC at runtime — that would
-        # cause a link flap and break the switch port.  Instead we fix the
-        # bridge FDB after creation to avoid collisions with the real device.
-        base_mac = (config.get("spoof_mac") or "").strip().lower()
-        if base_mac:
-            _validate_mac(base_mac)
-        self.spoof_mac = base_mac
-
         self.gateway_side_interface: str = ""
         self.client_side_interface: str = ""
 
@@ -232,13 +222,10 @@ class BridgeController:
         oc(f"Unmanage {self.nic1}", f"nmcli d set {self.nic1} managed no")
         oc(f"Unmanage {self.nic2}", f"nmcli d set {self.nic2} managed no")
 
-        # NOTE: we do NOT change NIC MACs here.  hwaddress in interfaces.d
-        # already set them at boot.  Changing the MAC requires link-down →
-        # link flap → STP reconvergence → broken discovery.
-        if self.spoof_mac:
-            log.info("NIC MACs spoofed at boot via hwaddress: %s=%s, %s=%s",
-                     self.nic1, self.int_to_mac[self.nic1],
-                     self.nic2, self.int_to_mac[self.nic2])
+        # NICs are DOWN at boot (no auto in interfaces.d) — hardware MAC
+        # has never appeared on the wire.  ebtables OUTPUT DROP is already
+        # set above, so even after we bring them up, no frames from our
+        # device can escape until the SNAT rules allow it.
 
         # load kernel modules
         oc("Load arptable_filter", "modprobe arptable_filter")
@@ -263,24 +250,15 @@ class BridgeController:
         oc(f"Add {self.nic1} to bridge", f"brctl addif {self.bridge_name} {self.nic1}")
         oc(f"Add {self.nic2} to bridge", f"brctl addif {self.bridge_name} {self.nic2}")
 
-        # Remove local FDB entries for the NIC MACs.  When a NIC joins a
-        # bridge the kernel adds a "permanent local" FDB entry for its MAC.
-        # If that MAC matches the real device on the other port (e.g. we
-        # spoofed the printer's MAC on eth0, and the real printer is on
-        # eth1), the bridge delivers frames to the kernel instead of
-        # forwarding them — breaking transparent pass-through.  The bridge
-        # has its own MAC (00:01:01:01:01:01) for local delivery; the NIC
-        # MACs don't need local entries.
-        for nic in (self.nic1, self.nic2):
-            mac = self.int_to_mac[nic]
-            oc(f"Remove local FDB entry for {nic} ({mac})",
-               f"bridge fdb del {mac} dev {nic} master 2>/dev/null; true")
-
         # configure bridge
         oc("Assign APIPA IP to bridge", f"ip addr add {self.bridge_ip}/16 dev {self.bridge_name}")
         oc("Set bridge MAC and disable ARP", f"ip link set dev {self.bridge_name} address {self.bridge_mac} arp off")
 
-        # bring interfaces up
+        # allow 802.1X EAPOL — set BEFORE bringing interfaces up so the
+        # very first EAPOL frame from the switch is forwarded to the client
+        oc("Allow EAPOL 802.1X", f"echo 8 > /sys/class/net/{self.bridge_name}/bridge/group_fwd_mask")
+
+        # bring interfaces up — switch sees link for the first time
         oc("Bridge up", f"ip link set dev {self.bridge_name} up")
         oc(f"{self.nic1} up", f"ip link set dev {self.nic1} up")
         oc(f"{self.nic2} up", f"ip link set dev {self.nic2} up")
@@ -293,9 +271,6 @@ class BridgeController:
                     oc("Delete default route", f"ip route delete {dr} >/dev/null 2>&1")
                 except Exception as exc:
                     log.warning("Could not delete default route: %s", exc)
-
-        # allow 802.1X EAPOL
-        oc("Allow EAPOL 802.1X", f"echo 8 > /sys/class/net/{self.bridge_name}/bridge/group_fwd_mask")
 
         # start network info tracker
         self.net_info = NetInfo(self.bridge_name, self.bridge_mac)
