@@ -64,18 +64,29 @@ class BridgeController:
         self.run_command_on_success: bool = config.get("run_command_on_success", False)
         self.autorun_command: str = config.get("autorun_command", "")
 
-        # MAC to present on attack NICs (default: Lexmark printer OUI)
-        # Set to "" or remove from config to skip NIC MAC spoofing
+        # MAC spoofing configuration
+        # spoof_mac = printer MAC set via hwaddress at boot (switch sees this)
+        # During bridge operation we switch to LAA versions (bit 1 of first
+        # octet set) to avoid FDB collision with the real printer on eth1.
+        # Set to "" or remove from config to skip NIC MAC spoofing entirely.
         base_mac = (config.get("spoof_mac") or "").strip().lower()
         if base_mac:
             _validate_mac(base_mac)
             parts = base_mac.split(":")
             parts[-1] = f"{(int(parts[-1], 16) + 1) & 0xFF:02x}"
-            self.spoof_mac1 = base_mac
-            self.spoof_mac2 = ":".join(parts)
+            # boot-time MACs (match hwaddress in interfaces.d)
+            self.boot_mac1 = base_mac
+            self.boot_mac2 = ":".join(parts)
+            # bridge-operation MACs (LAA — won't collide with the real device)
+            self.bridge_nic_mac1 = "02" + base_mac[2:]
+            laa_parts = ["02"] + base_mac.split(":")[1:]
+            laa_parts[-1] = f"{(int(laa_parts[-1], 16) + 1) & 0xFF:02x}"
+            self.bridge_nic_mac2 = ":".join(laa_parts)
         else:
-            self.spoof_mac1 = ""
-            self.spoof_mac2 = ""
+            self.boot_mac1 = ""
+            self.boot_mac2 = ""
+            self.bridge_nic_mac1 = ""
+            self.bridge_nic_mac2 = ""
 
         self.gateway_side_interface: str = ""
         self.client_side_interface: str = ""
@@ -235,23 +246,36 @@ class BridgeController:
         oc(f"Unmanage {self.nic1}", f"nmcli d set {self.nic1} managed no")
         oc(f"Unmanage {self.nic2}", f"nmcli d set {self.nic2} managed no")
 
-        # ── MAC spoofing (pre-bridge) ────────────────────────────────
-        # Bring NICs down and change their MAC addresses BEFORE they join
-        # the bridge and come up.  The hwaddress directive in interfaces.d
-        # already set this at boot, but we re-apply here as defense-in-depth
-        # (in case something reset the MAC).  The two NICs get different
-        # last bytes so the bridge can still distinguish ports.  Once
-        # discovery completes, ebtables SNAT rewrites all outbound frames
-        # to the real client/gateway MAC.
-        if self.spoof_mac1:
-            oc(f"{self.nic1} down for MAC change", f"ip link set dev {self.nic1} down")
-            oc(f"{self.nic2} down for MAC change", f"ip link set dev {self.nic2} down")
-            oc(f"Spoof {self.nic1} MAC → {self.spoof_mac1}", f"ip link set dev {self.nic1} address {self.spoof_mac1}")
-            oc(f"Spoof {self.nic2} MAC → {self.spoof_mac2}", f"ip link set dev {self.nic2} address {self.spoof_mac2}")
+        # ── MAC transition (boot → bridge) ──────────────────────────────
+        # At boot, hwaddress set the printer's real MAC on eth0 so the
+        # switch / MAB accepts the port.  Before we create the bridge we
+        # must change to different (LAA) MACs, otherwise the bridge FDB
+        # sees the printer MAC as "local" on eth0 AND "learned" from the
+        # real printer on eth1 — and stops forwarding frames to the printer.
+        #
+        # We try to change the MAC while the NIC is UP (no link flap).
+        # If the driver doesn't support live changes we fall back to
+        # down/set/leave-down (the bridge bring-up section will UP them).
+        if self.boot_mac1:
+            for nic, new_mac in ((self.nic1, self.bridge_nic_mac1),
+                                 (self.nic2, self.bridge_nic_mac2)):
+                current = self._read_mac(nic)
+                if current == new_mac:
+                    log.info("%s already has bridge MAC %s", nic, new_mac)
+                    continue
+                # attempt live MAC change (no link flap)
+                oc(f"Live MAC change {nic} → {new_mac}",
+                   f"ip link set dev {nic} address {new_mac}")
+                if self._read_mac(nic) != new_mac:
+                    log.warning("%s: live MAC change failed, bringing down", nic)
+                    oc(f"{nic} down for MAC change", f"ip link set dev {nic} down")
+                    oc(f"Set {nic} MAC → {new_mac}", f"ip link set dev {nic} address {new_mac}")
+                    # leave down — bridge bring-up section will UP it
 
-            # update the MAC lookup table — ebtables SNAT rules use these
-            self.int_to_mac[self.nic1] = self.spoof_mac1
-            self.int_to_mac[self.nic2] = self.spoof_mac2
+            self.int_to_mac[self.nic1] = self.bridge_nic_mac1
+            self.int_to_mac[self.nic2] = self.bridge_nic_mac2
+            log.info("Bridge NICs: %s=%s, %s=%s",
+                     self.nic1, self.bridge_nic_mac1, self.nic2, self.bridge_nic_mac2)
         else:
             log.info("NIC MAC spoofing disabled (no spoof_mac in config)")
 
