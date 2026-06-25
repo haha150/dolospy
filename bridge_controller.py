@@ -222,6 +222,11 @@ class BridgeController:
         oc(f"Unmanage {self.nic1}", f"nmcli d set {self.nic1} managed no")
         oc(f"Unmanage {self.nic2}", f"nmcli d set {self.nic2} managed no")
 
+        # NICs are DOWN at boot (no auto in interfaces.d) — hardware MAC
+        # has never appeared on the wire.  ebtables OUTPUT DROP is already
+        # set above, so even after we bring them up, no frames from our
+        # device can escape until the SNAT rules allow it.
+
         # load kernel modules
         oc("Load arptable_filter", "modprobe arptable_filter")
         oc("Load br_netfilter", "modprobe br_netfilter")
@@ -249,7 +254,11 @@ class BridgeController:
         oc("Assign APIPA IP to bridge", f"ip addr add {self.bridge_ip}/16 dev {self.bridge_name}")
         oc("Set bridge MAC and disable ARP", f"ip link set dev {self.bridge_name} address {self.bridge_mac} arp off")
 
-        # bring interfaces up
+        # allow 802.1X EAPOL — set BEFORE bringing interfaces up so the
+        # very first EAPOL frame from the switch is forwarded to the client
+        oc("Allow EAPOL 802.1X", f"echo 8 > /sys/class/net/{self.bridge_name}/bridge/group_fwd_mask")
+
+        # bring interfaces up — switch sees link for the first time
         oc("Bridge up", f"ip link set dev {self.bridge_name} up")
         oc(f"{self.nic1} up", f"ip link set dev {self.nic1} up")
         oc(f"{self.nic2} up", f"ip link set dev {self.nic2} up")
@@ -262,9 +271,6 @@ class BridgeController:
                     oc("Delete default route", f"ip route delete {dr} >/dev/null 2>&1")
                 except Exception as exc:
                     log.warning("Could not delete default route: %s", exc)
-
-        # allow 802.1X EAPOL
-        oc("Allow EAPOL 802.1X", f"echo 8 > /sys/class/net/{self.bridge_name}/bridge/group_fwd_mask")
 
         # start network info tracker
         self.net_info = NetInfo(self.bridge_name, self.bridge_mac)
